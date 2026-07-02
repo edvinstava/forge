@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Forge runtime artifacts
+runs/
+
+# Subagent-driven-development scratch (briefs, reports, diffs, ledger)
+.superpowers/
+
+# Claude Code agent scratch (worktrees, etc.)
+.claude/
+
+# Playwright MCP session artifacts
+.playwright-mcp/
+
+# Stray local clones used for manual testing
+/scratch-repos/
+
+# Web UI — keep dist (committed so pip-install users get the UI without Node)
+web/node_modules/
