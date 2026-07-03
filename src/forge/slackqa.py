@@ -1,6 +1,7 @@
 """Clone-only repo Q&A fast path: shallow-clone a repo to a TTL'd cache dir and
-run a one-shot agent-CLI call against it on the host — no containers, no
-session. `run`/`clock` are injectable for tests."""
+run a one-shot agent-CLI call against it in a disposable worker container
+(`docker run --rm`, clone mounted read-only) — no compose project, no session.
+`run`/`clock` are injectable for tests."""
 import os
 import re
 import shutil
@@ -38,6 +39,24 @@ def needs_clone(d: Path, ttl_secs: int, clock) -> bool:
         return True
 
 
+def container_argv(cfg, provider, d: Path, agent_argv: list, env_keys) -> list:
+    """One-shot `docker run` for the agent CLI against an untrusted clone: the
+    repo rides read-only at /work (Q&A must never modify it), secrets ride as
+    name-only `-e KEY` flags with values in the client process env — inside the
+    container only, never argv. --entrypoint overrides the worker image's
+    `sleep infinity`. Codex plan auth mounts ~/.codex like the compose worker
+    (session._mount_provider_auth) — read-write, the CLI refreshes auth.json."""
+    cmd = ["docker", "run", "--rm", "-v", f"{d}:/work:ro", "-w", "/work",
+           "--entrypoint", agent_argv[0]]
+    for k in env_keys:
+        cmd += ["-e", k]
+    if provider.name == "codex" and cfg.codex_auth != "api":
+        home = providers.codex_home()
+        if home.is_dir():
+            cmd += ["-v", f"{home}:/home/forge/.codex"]
+    return cmd + [cfg.image_tag] + agent_argv[1:]
+
+
 def answer_question(cfg, slug: str, question: str, run=subprocess.run,
                     clock=time.time) -> str:
     if not _SLUG.match(slug or "") or ".." in slug:
@@ -55,10 +74,10 @@ def answer_question(cfg, slug: str, question: str, run=subprocess.run,
         d.mkdir(exist_ok=True)
         (d / _MARKER).write_text(str(clock()))
     p = providers.from_config(cfg)
-    argv = p.worker_cmd(_QA_PROMPT.format(q=question), None)
-    r = run(argv, cwd=str(d),
-            env={**os.environ, **providers.host_env(p, cfg)},
-            capture_output=True, text=True)
+    secrets = p.secrets(cfg)
+    r = run(container_argv(cfg, p, d, p.worker_cmd(_QA_PROMPT.format(q=question),
+                                                   None), secrets),
+            env={**os.environ, **secrets}, capture_output=True, text=True)
     res = p.parse_result(r.stdout)
     if res.auth_error or res.is_error:
         return f"⚠️ couldn't answer that one: {(res.result_text or 'error')[:200]}"
