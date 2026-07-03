@@ -1,15 +1,25 @@
-# Forge
+# edvin-not-devin
 
-**Forge is an autonomous coding coworker you drive from Slack or a web chat.**
-Point it at a GitHub repo and a task; it plans the change, brings the app up in a
-disposable Docker environment, edits the code, verifies it (tests / lint / build),
-browser-tests the result with screenshots, and opens a pull request that reads like
-a colleague's — all on **your Claude or ChatGPT subscription**, never a metered API
-key. The fixed app is left running at a clickable URL so you can see the change live.
+**A personal, vibe-coded AI coding coworker you drive from Slack or a web chat.**
+(Edvin, not Devin.) Point it at a GitHub repo and a task; it plans the change,
+brings the app up in a disposable Docker environment, edits the code, verifies it
+(tests / lint / build), browser-tests the result with screenshots, and opens a pull
+request that reads like a colleague's — all on **your Claude or ChatGPT
+subscription**, never a metered API key. The fixed app is left running at a
+clickable URL so you can see the change live.
 
-> Single-user, local, low-ceremony — a power tool for one developer's laptop, not a
-> multi-tenant platform. See the [security model](#security-model) before pointing it
-> at repositories you don't trust.
+> **What this is.** A hobby project I built for my own use, to learn and play with
+> Slack integrations, GitHub Apps and webhooks, spinning apps up in isolation
+> inside Docker containers, Cloudflare tunnels, and driving AI agent CLIs — not a
+> product, and largely vibe-coded. It's single-user, local, and low-ceremony: a
+> power tool for one developer's laptop, not a multi-tenant platform. Read the
+> [security model](#security-model) before pointing it at repositories you don't
+> trust, and use it at your own risk.
+>
+> **Naming note:** the project started life as *forge* and the internals keep that
+> name — the short CLI command is `forge` (installed alongside `edvin-not-devin`),
+> config lives in `~/.forge/`, and env vars are `FORGE_*`. The examples below use
+> the short command.
 
 ---
 
@@ -24,11 +34,11 @@ you: "fix the off-by-one in the date picker on the webapp repo"
   ├─ verify                     runs the repo's own tests/lint/build; repairs until green
   ├─ browser QA                 drives the running app, attaches before/after screenshots
   ├─ self-review + fix          forge reviews its own diff before shipping
-  ├─ open a PR                  authored as you, with a real title + body
+  ├─ open a PR                  with an agent-written title + body
   └─ learn                      records durable per-repo lessons for next time
 ```
 
-- **Any stack, understood by AI.** Forge detects how to bring a repo up from a
+- **Any stack, understood by AI.** It detects how to bring a repo up from a
   deterministic recipe chain, and an AI probe fills the gaps (see [Recipes](#recipes-how-a-repos-stack-comes-up)).
 - **Plan → build → verify → repair**, Devin-style: the orchestrator owns the
   pass/fail verdict; the agent only reports. It won't open a non-draft PR it couldn't
@@ -56,7 +66,7 @@ you: "fix the off-by-one in the date picker on the webapp repo"
 ## Install
 
 ```bash
-git clone https://github.com/your-org/forge && cd forge
+git clone https://github.com/edvinstava/edvin-not-devin && cd edvin-not-devin
 
 # 1. Install forge with the extras you want (web UI + Slack shown here).
 pip install -e ".[web,slack]"        # or: uv sync --extra web --extra slack
@@ -112,7 +122,7 @@ reaps the previous one. (Concurrent sessions are a `forge web` feature.)
 
 ## Slack bot
 
-Drive Forge from a Slack DM or channel: *"fix the date picker on the landing repo"* →
+Drive it from a Slack DM or channel: *"fix the date picker on the landing repo"* →
 live progress in-thread, before/after screenshots, a public URL to the running app,
 and an **Open PR** button. Uses **Socket Mode**, so there's no inbound endpoint to
 expose.
@@ -156,7 +166,7 @@ lp:  acme/landing-page
 
 ## Providers & billing
 
-Forge runs an agent CLI *inside* the worker container and always prefers your plan
+An agent CLI runs *inside* the worker container and always prefers your plan
 over metered API usage. Only the active provider's credential enters the container.
 
 | Provider | `FORGE_PROVIDER` | Auth | Models |
@@ -171,7 +181,7 @@ Claude runs on the subscription only.)
 
 ## Recipes (how a repo's stack comes up)
 
-Forge resolves a **recipe** — how to stand the app up — by inspecting the cloned repo.
+The tool resolves a **recipe** — how to stand the app up — by inspecting the cloned repo.
 Resolution is deterministic, first match wins:
 
 1. **CHAP** markers → `dhis2-chap` (a multi-repo DHIS2 + chap-core stack)
@@ -218,13 +228,16 @@ forge bake dhis2-chap     # downloads the DHIS2 demo DB into the seed cache
   logs and transcripts.
 - **Self-review**: forge reviews its own diff and fixes issues before opening the PR
   (`FORGE_SELF_REVIEW=0` to disable).
-- **The PR** is authored as you, with an agent-written title (issue keys like
-  `ABC-123` carried through) and a Summary / Changes / Testing body. Runtime
-  scaffolding and lockfile churn are kept out of the diff.
+- **The PR** carries an agent-written title (issue keys like `ABC-123` carried
+  through) and a Summary / Changes / Testing body. Runtime scaffolding and lockfile
+  churn are kept out of the diff. Commits are authored as you (with a
+  `Co-Authored-By` bot trailer in the default mode); with a GitHub App configured
+  the push and the PR itself come from `<app-slug>[bot]`, without one they come
+  from your PAT.
 
 ## Learning
 
-Forge keeps a per-repo knowledge overlay under `~/.forge/knowledge/<owner>/<repo>.yml`
+It keeps a per-repo knowledge overlay under `~/.forge/knowledge/<owner>/<repo>.yml`
 (never inside the repo, so it can't leak into a PR). It records env facts learned by
 the probe and durable lessons written by the post-PR retrospective; the planner **and**
 executor get them on every future run. Teach it directly:
@@ -239,7 +252,7 @@ User-taught lessons are pinned and never evicted. Disable learning with `FORGE_L
 
 ## Reviewing pull requests
 
-Forge can review an existing PR and post a summary + inline comments as a neutral
+It can also review an existing PR and post a summary + inline comments as a neutral
 `COMMENT` (it never approves or blocks):
 
 ```bash
@@ -249,18 +262,25 @@ forge review https://github.com/owner/repo/pull/123
 
 From Slack, mention a PR (`review owner/repo#123` or paste a URL). To have reviews
 post as a bot identity (**`forge[bot]`**) and to credit forge on commits, set up an
-optional GitHub App — see [GitHub App](#github-app-optional).
+optional GitHub App — see [GitHub App](#github-app-recommended).
 
 ---
 
-## GitHub App (optional)
+## GitHub App (recommended)
 
-Without setup, reviews post under your own account with a "🔨 Forge Review" header.
-A GitHub App makes them appear as `<app-slug>[bot]` and enables the
-`@<app-slug> review` comment-command trigger.
+Everything works without one — but a GitHub App buys you three things:
+
+- **Security:** worker pushes/PRs run on a short-lived token scoped to the single
+  target repo, minted per run, instead of falling back to your full-scope PAT
+  (see [security model](#security-model)).
+- **Identity:** reviews post as `<app-slug>[bot]` (instead of your own account with
+  a "🔨 Forge Review" header), and branch pushes / PRs come from the bot — which
+  also means you can review and approve the PRs yourself.
+- **Automation:** the `@<app-slug> review` comment-command trigger.
 
 1. Create a GitHub App; upload an avatar. Permissions: **Pull requests: Read & write**,
-   **Contents: Read**, **Metadata: Read**, **Issues: Read** (Write only if you want the
+   **Contents: Read & write** (write is what lets the worker push on the App token),
+   **Metadata: Read**, **Issues: Read** (Write only if you want the
    👀 ack reaction). Subscribe to the **Issue comment** event.
 2. Generate a private key (PEM), note the App ID, install the App on your repos.
 3. Configure forge and install the JWT-signing extra:
@@ -298,7 +318,7 @@ Everything is read from the environment (or `~/.forge/config.env`).
 | `FORGE_PROVIDER` | `claude` | Agent CLI: `claude` or `codex` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | Claude subscription token (`claude setup-token`) |
 | `OPENAI_API_KEY` / `FORGE_CODEX_AUTH` | — / `auto` | Codex API-key fallback; `api` forces the key over plan auth |
-| `GH_TOKEN` | — | GitHub token for clone / push / PR (`gh auth token`) |
+| `GH_TOKEN` | — | GitHub PAT (`gh auth token`): host-side clones, and the worker push/PR fallback when no GitHub App is configured (never resident in the container) |
 | `FORGE_GIT_NAME` / `FORGE_GIT_EMAIL` | from `git`/`gh` | Commit author identity |
 | `FORGE_COMMIT_IDENTITY` | `auto` | `auto` (you + `Co-Authored-By: forge[bot]`) / `forge` / `user` |
 
@@ -338,7 +358,7 @@ Everything is read from the environment (or `~/.forge/config.env`).
 
 ## Security model
 
-Forge is designed for a **single developer running it on their own machine against
+This is designed for a **single developer running it on their own machine against
 repositories they trust.** Understand these properties before exposing it more widely:
 
 - **The agent runs with permission gates disabled inside the worker container**
@@ -346,8 +366,20 @@ repositories they trust.** Understand these properties before exposing it more w
   container is the sandbox — it has no `--privileged`, no Docker socket, and published
   ports bind to `127.0.0.1` — but the agent executes whatever the repo and task
   direct. A **prompt-injecting repository** (malicious README / code comments) is a
-  real threat: the worker holds your `GH_TOKEN` and provider credential to push and
-  open the PR, so only point forge at repos you trust.
+  real threat: the agent's provider credential (Claude/Codex) is in the container,
+  and the agent can be steered into hostile edits. Only point it at repos you trust.
+- **The worker container holds no GitHub token.** The container-resident `GH_TOKEN`
+  is empty; a token is injected only into forge's own `git push` / `gh pr create`
+  executions, one exec at a time. With the [GitHub App](#github-app-recommended)
+  configured, that token is minted **per run, scoped to the single target repo, and
+  expires within an hour** — a hostile repo that manages to capture it during a push
+  (e.g. via a planted git hook or `.git/config` credential-helper trick) can reach
+  only itself, briefly. Without the App the fallback is your full-scope `GH_TOKEN`
+  PAT — still per-exec rather than resident, but one more reason to set the App up.
+- **Host-side git against agent-modified workspaces is hardened.** A workspace's
+  `.git/config` could otherwise make git execute arbitrary commands *on the host*
+  (via `core.fsmonitor`, `core.hooksPath`, or `credential.helper`); every host-side
+  git invocation against a run workspace overrides all three.
 - **The web/`/api` surface is unauthenticated** (single-user, local). Keep it bound to
   loopback. In `--github` mode a public tunnel fronts the app, but the gate is an
   allowlist that exposes **only** the signed `POST /api/github/webhook` — any other
@@ -356,9 +388,12 @@ repositories they trust.** Understand these properties before exposing it more w
   into the repo), and QA credentials are stored `chmod 600` under `~/.forge/knowledge`
   and redacted from logs, transcripts, and Slack. The GitHub webhook uses timing-safe
   HMAC verification with replay dedup.
+- **Known rough edges** (documented, not fixed): the Slack "ask a question about a
+  repo" path runs the agent on the host against a fresh clone, not in a container;
+  and `~/.codex` is mounted read-write into the worker when using the Codex
+  provider (its CLI refreshes the auth file in place).
 
-Found a security issue? Please open an issue or contact the maintainers privately
-before disclosing.
+Found a security issue? It's a personal project — please open an issue.
 
 ## Troubleshooting
 

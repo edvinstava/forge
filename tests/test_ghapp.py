@@ -87,6 +87,51 @@ def test_installation_token_is_cached(tmp_path):
     assert len(http.calls) == n
 
 
+def test_installation_token_is_scoped_to_the_single_repo(tmp_path):
+    # The minted token is what forge's push/PR execs run with in the worker —
+    # scoping it to the one repo bounds what a prompt-injected repo that
+    # captures it can reach (itself, for at most an hour).
+    http = FakeHttp()
+    app = ghapp.GhApp(_cfg(tmp_path), signer=lambda *a: "JWT", http=http,
+                      clock=lambda: 1000.0)
+    app.installation_token("o", "r")
+    method, url, _tok, data = http.calls[-1]
+    assert method == "POST" and url.endswith("/access_tokens")
+    assert data == {"repositories": ["r"]}
+
+
+def test_worker_token_prefers_scoped_app_token(tmp_path):
+    cfg = _cfg(tmp_path, gh_token="ghp_pat")
+    app = ghapp.GhApp(cfg, signer=lambda *a: "JWT", http=FakeHttp(),
+                      clock=lambda: 1000.0)
+    assert ghapp.worker_token(cfg, "o/r", app=app) == "ghs_inst"
+
+
+def test_worker_token_falls_back_to_pat_without_app(tmp_path):
+    cfg = _cfg(tmp_path, gh_app_id="", gh_token="ghp_pat")
+    assert ghapp.worker_token(cfg, "o/r") == "ghp_pat"
+
+
+def test_worker_token_falls_back_to_pat_on_mint_failure(tmp_path):
+    # An App outage / uninstalled repo must never block a push.
+    def boom(method, url, token, data=None):
+        raise RuntimeError("github down")
+    cfg = _cfg(tmp_path, gh_token="ghp_pat")
+    app = ghapp.GhApp(cfg, signer=lambda *a: "JWT", http=boom,
+                      clock=lambda: 1000.0)
+    assert ghapp.worker_token(cfg, "o/r", app=app) == "ghp_pat"
+
+
+def test_worker_token_falls_back_to_pat_for_non_slug_repo(tmp_path):
+    # A run without an owner/repo slug (e.g. no repo recorded yet) has nothing
+    # to scope an App token to.
+    cfg = _cfg(tmp_path, gh_token="ghp_pat")
+    app = ghapp.GhApp(cfg, signer=lambda *a: "JWT", http=FakeHttp(),
+                      clock=lambda: 1000.0)
+    assert ghapp.worker_token(cfg, "", app=app) == "ghp_pat"
+    assert ghapp.worker_token(cfg, "noslash", app=app) == "ghp_pat"
+
+
 def test_bot_identity_derives_login_and_noreply_email(tmp_path):
     http = FakeHttp()
     app = ghapp.GhApp(_cfg(tmp_path), signer=lambda *a: "JWT", http=http,

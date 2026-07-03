@@ -28,6 +28,8 @@ visible to Next when it loads the module)."""
 import json
 import re
 
+from forge.hostops import hardened_git
+
 # Dev-asset origins. Matched against the hostname (port stripped), so bare
 # wildcards work for the local URL on any port. `web` is the compose service name
 # (some same-network requests carry it as the Host).
@@ -155,10 +157,10 @@ def unpatch_for_commit(host, ws: str) -> list:
         stripped = unpatch(host.read(ws, name) or "")
         if stripped is None:
             continue
-        tracked = run(["git", "-C", ws, "ls-files", "--error-unmatch", name])
+        tracked = run(hardened_git(ws, "ls-files", "--error-unmatch", name))
         if getattr(tracked, "exit_code", 1) != 0:
             continue
-        run(["git", "-C", ws, "update-index", "--no-skip-worktree", name])
+        run(hardened_git(ws, "update-index", "--no-skip-worktree", name))
         host.write_file(f"{ws}/{name}", stripped)
         stripped_names.append(name)
     return stripped_names
@@ -172,7 +174,7 @@ def _hide_from_git(host, ws: str, name: str, tracked: bool) -> None:
     run = getattr(host, "run", None)
     if tracked:
         if run is not None:
-            run(["git", "-C", ws, "update-index", "--skip-worktree", name])
+            run(hardened_git(ws, "update-index", "--skip-worktree", name))
         return
     exclude_rel = ".git/info/exclude"
     existing = host.read(ws, exclude_rel) or ""

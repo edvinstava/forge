@@ -229,10 +229,11 @@ class GitHost(FakeHost):
 def test_ensure_hides_patched_config_from_git():
     # The origin patch is forge infrastructure — it must never appear in the
     # worker's diff or the PR (bit us in acme/webapp#222).
+    from forge.hostops import hardened_git
     host = GitHost({"next.config.js": "module.exports = {};\n"})
     assert ensure_dev_origins(host, "/ws") is True
-    assert ["git", "-C", "/ws", "update-index", "--skip-worktree",
-            "next.config.js"] in host.ran
+    assert hardened_git("/ws", "update-index", "--skip-worktree",
+                        "next.config.js") in host.ran
 
 
 def test_ensure_rehides_already_marked_config():
@@ -272,11 +273,12 @@ def test_unpatch_survives_formatter_rewrap():
 
 def test_unpatch_for_commit_strips_tracked_config_and_unhides():
     from forge.nextdev import unpatch_for_commit, _MARKER
+    from forge.hostops import hardened_git
     original = "module.exports = { images: {} };\n"
     host = GitHost({"next.config.js": inject(original)})
     assert unpatch_for_commit(host, "/ws") == ["next.config.js"]
-    assert ["git", "-C", "/ws", "update-index", "--no-skip-worktree",
-            "next.config.js"] in host.ran
+    assert hardened_git("/ws", "update-index", "--no-skip-worktree",
+                        "next.config.js") in host.ran
     assert host.files["next.config.js"] == original
     assert _MARKER not in host.files["next.config.js"]
 

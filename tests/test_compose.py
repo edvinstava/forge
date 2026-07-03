@@ -17,6 +17,15 @@ def test_exec_cmd():
         "exec", "-T", "-w", "/work", "web", "ls", "-la"]
 
 
+def test_exec_cmd_env_keys_are_name_only():
+    # Per-exec secrets travel as `-e KEY` (name only): docker forwards the
+    # value from the client process env, so it never appears in argv / `ps`.
+    assert compose.exec_cmd("forge-x", ["a.yml"], "forge", ["git", "push"],
+                            "/work", env_keys=("GH_TOKEN",)) == [
+        "docker", "compose", "-p", "forge-x", "-f", "a.yml",
+        "exec", "-T", "-w", "/work", "-e", "GH_TOKEN", "forge", "git", "push"]
+
+
 def test_port_cmd():
     assert compose.port_cmd("forge-x", ["a.yml"], "web", 3000)[-3:] == \
         ["port", "web", "3000"]

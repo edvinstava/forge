@@ -33,9 +33,14 @@ def start_cmd(project: str, files: list) -> list:
 
 
 def exec_cmd(project: str, files: list, service: str, argv: list,
-             workdir: str = "/work") -> list:
-    # -T disables TTY allocation so output is captured cleanly
-    return _base(project, files) + ["exec", "-T", "-w", workdir, service] + list(argv)
+             workdir: str = "/work", env_keys=()) -> list:
+    # -T disables TTY allocation so output is captured cleanly. env_keys are
+    # passed NAME-ONLY (`-e KEY`): docker forwards each value from the client
+    # process env, so per-exec secrets never appear in argv / `ps`.
+    cmd = _base(project, files) + ["exec", "-T", "-w", workdir]
+    for k in env_keys:
+        cmd += ["-e", k]
+    return cmd + [service] + list(argv)
 
 
 def port_cmd(project: str, files: list, service: str, container_port: int) -> list:

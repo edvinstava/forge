@@ -85,11 +85,12 @@ def test_start_reserves_block_and_rewrites_cloned_config(tmp_path):
 
 def test_start_marks_config_skip_worktree(tmp_path):
     # the port-shifted config.toml must not leak into the worker's PR/diff
+    from forge.hostops import hardened_git
     mgr, store, host = _mgr(tmp_path)
     list(mgr.start("r1", "o/webapp", "github"))
     ws = str(tmp_path / "runs" / "r1" / "workspace")
-    assert ["git", "-C", ws, "update-index", "--skip-worktree",
-            "supabase/config.toml"] in host.runs
+    assert hardened_git(ws, "update-index", "--skip-worktree",
+                        "supabase/config.toml") in host.runs
 
 
 def test_start_bakes_offset_url_into_compose(tmp_path):
@@ -151,7 +152,7 @@ def test_failed_up_stops_supabase_and_releases_block(tmp_path):
 def test_failed_health_stops_supabase_and_releases_block(tmp_path):
     # compose comes up but the app never turns healthy → same leak class.
     class UnhealthyEnv(FakeEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "curl -fs" in " ".join(argv):       # the health poll
                 return ExecResult(1, "", "health timeout")

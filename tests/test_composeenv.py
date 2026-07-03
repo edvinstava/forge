@@ -82,6 +82,38 @@ def test_stop_swallows_timeout(monkeypatch):
     ComposeEnv("rid", []).stop()          # must NOT raise
 
 
+def test_exec_env_is_name_only_in_argv_value_via_process_env(monkeypatch):
+    # exec(env=...) must keep the secret value OUT of argv (only `-e KEY`
+    # forwarding) and hand it to the subprocess environment instead.
+    from forge import composeenv
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"], captured["env"] = cmd, kw.get("env")
+        class R: returncode, stdout, stderr = 0, "", ""
+        return R()
+    monkeypatch.setattr(composeenv.subprocess, "run", fake_run)
+    ComposeEnv("rid", []).exec(["git", "push"], env={"GH_TOKEN": "sekrit"})
+    assert ["-e", "GH_TOKEN"] == captured["cmd"][
+        captured["cmd"].index("-e"):captured["cmd"].index("-e") + 2]
+    assert "sekrit" not in " ".join(captured["cmd"])
+    assert captured["env"]["GH_TOKEN"] == "sekrit"
+
+
+def test_exec_without_env_keeps_prior_shape(monkeypatch):
+    from forge import composeenv
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"], captured["env"] = cmd, kw.get("env")
+        class R: returncode, stdout, stderr = 0, "", ""
+        return R()
+    monkeypatch.setattr(composeenv.subprocess, "run", fake_run)
+    ComposeEnv("rid", []).exec(["ls"])
+    assert "-e" not in captured["cmd"]
+    assert captured["env"] is None        # inherit the parent env untouched
+
+
 def test_start_raises_on_failure(monkeypatch):
     import pytest
     from forge import composeenv

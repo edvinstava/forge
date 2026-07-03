@@ -14,7 +14,7 @@ class RecordingEnv:
     def __init__(self):
         self.execs = []
 
-    def exec(self, argv, service=None, workdir="/work"):
+    def exec(self, argv, service=None, workdir="/work", env=None):
         from forge.container import ExecResult
         self.execs.append(argv)
         joined = " ".join(argv)

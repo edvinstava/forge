@@ -3,16 +3,16 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "forge-agent"
+name = "edvin-not-devin"
 version = "0.1.0"
-description = "AI coding coworker: disposable Docker environments, verified changes, and PRs that read like a colleague's — driven from Slack or a web UI on your Claude/ChatGPT subscription."
+description = "Personal AI coding coworker experiment (Edvin, not Devin): disposable Docker environments, verified changes, and PRs — driven from Slack or a web UI on your Claude/ChatGPT subscription."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Forge contributors" }]
+authors = [{ name = "Edvin" }]
 keywords = ["ai", "agent", "claude", "codex", "docker", "code-review", "developer-tools"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
@@ -29,11 +29,13 @@ slack = ["slack_bolt>=1.18"]
 gh-app = ["pyjwt>=2.8", "cryptography>=42"]
 
 [project.urls]
-# TODO: point these at your fork once published.
-Homepage = "https://github.com/your-org/forge"
-Repository = "https://github.com/your-org/forge"
+Homepage = "https://github.com/edvinstava/edvin-not-devin"
+Repository = "https://github.com/edvinstava/edvin-not-devin"
 
 [project.scripts]
+edvin-not-devin = "forge.cli:main"
+# The project began life as "forge" and the internals keep that name; this
+# short alias matches the FORGE_* env vars, ~/.forge/ config dir, and docs.
 forge = "forge.cli:main"
 
 [tool.setuptools.packages.find]

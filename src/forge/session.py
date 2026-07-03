@@ -34,7 +34,7 @@ from forge.session_review import ReviewOps
 from forge import supaports
 from forge.supaports import NoFreePortBlock, SupabaseAllocator
 from forge.verify import parse_verify
-from forge.hostops import exclude_forge_scratch
+from forge.hostops import exclude_forge_scratch, hardened_git
 
 __all__ = ["SessionManager", "TurnEvent", "default_env_factory"]
 
@@ -68,6 +68,7 @@ class SessionManager(ReviewOps, LifecycleOps):
         self._proxy_refresh = proxy_refresh or (lambda: None)
         self.knowledge = KnowledgeStore(config.knowledge_dir)
         self.provider = providers.from_config(config)
+        self._gh_app = None               # memoized by _ghapp (False = no App)
         self._verify_plans: dict = {}
         # Single-flight guard: at most one turn per run at a time. The manager is
         # driven concurrently (FastAPI threadpool, Slack daemon thread,
@@ -114,10 +115,25 @@ class SessionManager(ReviewOps, LifecycleOps):
         # decides its own auth (e.g. codex suppresses the API key when a
         # ChatGPT-plan login is mounted, so usage bills the subscription,
         # never per-token API costs).
+        #
+        # GH_TOKEN is deliberately EMPTY: the worker runs untrusted repo code
+        # with permission gates disabled, so no GitHub token may sit in its
+        # resident environment. forge's own git/gh execs get one per exec
+        # instead (_gh_env).
         return {"CLAUDE_CODE_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
-                "GH_TOKEN": self.cfg.gh_token,
+                "GH_TOKEN": "",
                 "FORGE_SUPABASE_ANON_KEY": SUPABASE_LOCAL_ANON_KEY,
                 **self.provider.secrets(self.cfg)}
+
+    def _gh_env(self, run_id) -> dict:
+        """Env for forge's own git/gh execs (credential setup, push, PR
+        create), minted fresh per use: a short-lived App token scoped to the
+        run's repo when the App is configured, else the PAT. Either way the
+        token exists only inside those exec'd processes — never in the worker
+        container's resident environment (see _secrets)."""
+        from forge import ghapp
+        return {"GH_TOKEN": ghapp.worker_token(self.cfg, self._repo_slug(run_id),
+                                               app=self._ghapp())}
 
     def _session_id(self, run_id):
         """The run's resumable agent session id — but only when it was minted
@@ -174,8 +190,14 @@ class SessionManager(ReviewOps, LifecycleOps):
         return wr
 
     def _ghapp(self):
-        from forge import ghapp
-        return ghapp.GhApp(self.cfg) if ghapp.is_configured(self.cfg) else None
+        # Memoized: GhApp caches installation tokens (~50 min) and the bot
+        # identity, so one instance per manager avoids re-minting a token for
+        # every push / Co-Authored-By lookup.
+        if self._gh_app is None:
+            from forge import ghapp
+            self._gh_app = (ghapp.GhApp(self.cfg)
+                            if ghapp.is_configured(self.cfg) else False)
+        return self._gh_app or None
 
     def _commit_identity(self, run_id):
         """Resolve (name, email) for commits per cfg.commit_identity.
@@ -261,7 +283,9 @@ class SessionManager(ReviewOps, LifecycleOps):
         # The rewrite is infra, not the user's work: hide it from git so it never
         # lands in the worker's diff or PR (skip-worktree keeps `supabase stop`
         # working since the offset project_id stays on disk).
-        self.host.run(["git", "-C", ws, "update-index", "--skip-worktree", rel])
+        # hardened_git: on the wake path the workspace has already been agent-
+        # modified, so its .git/config must not get to execute host commands.
+        self.host.run(hardened_git(ws, "update-index", "--skip-worktree", rel))
         return offset
 
     def _repo_slug(self, run_id):
@@ -467,7 +491,7 @@ class SessionManager(ReviewOps, LifecycleOps):
             yield TurnEvent("error", {"kind": "up", "detail": str(e)[:300]})
             return
         self.store.set_state(run_id, "running")
-        env.exec(cmd.setup_git_cmd(), service="forge")
+        env.exec(cmd.setup_git_cmd(), service="forge", env=self._gh_env(run_id))
         for svc, argv in recipe.seed:
             env.exec(argv, service=svc)
         # The web container + its network now exist; let Caddy attach and pick up
@@ -729,10 +753,13 @@ class SessionManager(ReviewOps, LifecycleOps):
             unpatched = []
         trailer = self._commit_trailer(run_id)
         commit_msg = f"{title}\n\n{trailer}" if trailer else title
+        # One token for the push + PR-create pair; only these execs see it.
+        gh = self._gh_env(run_id)
         try:
             for cc in cmd.commit_cmds(commit_msg, name, email):
                 env.exec(cc, service="forge")
-            if env.exec(cmd.push_cmd(run["branch"]), service="forge").exit_code != 0:
+            if env.exec(cmd.push_cmd(run["branch"]), service="forge",
+                        env=gh).exit_code != 0:
                 return {"ok": False, "reason": "push_failed"}
             plan = self._get_verify_plan(run_id)
             draft = (not plan.has_real_verification) or bool(verify_failed) or bool(note)
@@ -748,7 +775,7 @@ class SessionManager(ReviewOps, LifecycleOps):
             env.exec(["bash", "-lc", f"printf '%s' {shlex.quote(body)} > /work/report.md"],
                      service="forge")
             pr = env.exec(cmd.pr_create_cmd(title, "/work/report.md", draft),
-                          service="forge")
+                          service="forge", env=gh)
         finally:
             if unpatched:   # keep the live dev server proxied whatever happened
                 try:

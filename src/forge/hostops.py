@@ -14,9 +14,26 @@ _FORGE_SCRATCH_PATTERNS = [
     ".forge/review.json",
     ".forge/lessons.json",
     ".forge/pr.json",
+    ".forge/pr.diff",
     ".forge/artifacts/",
     ".forge/inbox/",
 ]
+
+
+def hardened_git(ws: str, *args: str) -> list:
+    """git argv for HOST-side runs against a workspace the agent has already
+    modified. Treat that repo's .git/config as hostile input: core.fsmonitor,
+    core.hooksPath and credential.helper can each make git execute arbitrary
+    commands — on the HOST, outside the container sandbox. Command-line -c
+    wins over repo config for the single-valued keys; the empty
+    credential.helper RESETS the repo's helper list, then gh is re-added as
+    the only helper so authenticated pushes still work (token via env)."""
+    return ["git",
+            "-c", "core.fsmonitor=false",
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "credential.helper=",
+            "-c", "credential.helper=!gh auth git-credential",
+            "-C", ws, *args]
 
 
 def exclude_forge_scratch(host, ws: str) -> None:

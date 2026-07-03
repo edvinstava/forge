@@ -58,6 +58,13 @@ class ReviewOps:
 
     def _review_pass(self, run_id, ref, model):
         env = self._env_for(run_id)
+        # Pre-fetch the PR diff HOST-side and drop it into the workspace: the
+        # review agent runs on untrusted PR code, so the container gets no
+        # GitHub token — it reads .forge/pr.diff instead of running `gh`.
+        ws = Path(self.cfg.runs_dir) / run_id / "workspace"
+        diff = self.host.run(cmd.pr_diff_cmd(ref.slug, ref.number),
+                             env={"GH_TOKEN": self.cfg.gh_token}).stdout
+        self.host.write_file(str(ws / ".forge" / "pr.diff"), diff or "")
         full = build_review_prompt(ref.slug, ref.number, self._app_url(run_id))
         chosen = self.provider.resolve_model(
             model, "review for correctness bugs and security")

@@ -47,7 +47,7 @@ class FakeEnv:
     def up(self, env=None):
         self.upped = True
 
-    def exec(self, argv, workdir="/work", service=None):
+    def exec(self, argv, workdir="/work", service=None, env=None):
         self.calls.append(list(argv))
         for pred, res in self.handlers:
             if pred(argv):
@@ -79,7 +79,7 @@ class PlanWritingEnv(FakeEnv):
         super().__init__(handlers, host_port)
         self._ws = ws_path
 
-    def exec(self, argv, workdir="/work", service=None):
+    def exec(self, argv, workdir="/work", service=None, env=None):
         # Detect a planning worker call: claude -p <prompt that starts with planning text>
         if (len(argv) >= 3 and argv[0] == "claude" and argv[1] == "-p"
                 and "You are planning" in argv[2]):
@@ -87,7 +87,7 @@ class PlanWritingEnv(FakeEnv):
             forge_dir.mkdir(parents=True, exist_ok=True)
             (forge_dir / "plan.json").write_text(json.dumps(_PLAN_OBJ))
             return ExecResult(0, _PLAN_WORKER_OK, "")
-        return super().exec(argv, workdir, service)
+        return super().exec(argv, workdir, service, env)
 
 
 def _cfg(tmp):
@@ -252,3 +252,44 @@ def test_run_real_plan_gate_rejects_after_provision(tmp_path):
                 policy=flow.CheckpointPolicy.for_cli(auto=False), approve=approve)
     assert out.state == "stopped_plan"
     assert "goal" in seen["plan"]            # a REAL plan dict, not {"repo","task"}
+
+
+def test_worker_env_has_no_pat_and_git_execs_get_token(tmp_path):
+    # The one-shot CLI path mirrors SessionManager: the container env never
+    # receives the GitHub token; forge's own git/gh execs get it per exec.
+    files = {"package.json": json.dumps({"scripts": {"dev": "next dev", "test": "t"}})}
+    handlers = [
+        (lambda a: _has(a, "claude", "-p"), ExecResult(0, WORKER_OK, "")),
+        (lambda a: a[:2] == ["npm", "test"], ExecResult(0, "ok", "")),
+        (lambda a: _has(a, "git", "status", "--porcelain"), ExecResult(0, " M f", "")),
+        (lambda a: _has(a, "gh", "pr", "create"),
+         ExecResult(0, "https://github.com/a/b/pull/33", "")),
+    ]
+
+    class TokenEnv(FakeEnv):
+        def __init__(self, handlers, host_port=None):
+            super().__init__(handlers, host_port)
+            self.up_secrets, self.gh_execs = None, []
+
+        def up(self, env=None):
+            self.up_secrets = env
+            self.upped = True
+
+        def exec(self, argv, workdir="/work", service=None, env=None):
+            if env is not None:
+                self.gh_execs.append((list(argv), dict(env)))
+            return super().exec(argv, workdir, service)
+
+    host = FakeHost(files)
+    env = TokenEnv(handlers, host_port=5099)
+    store = Store(tmp_path / "db")
+    o = ComposeOrchestrator(_cfg(tmp_path), store, host,
+                            env_factory=lambda rid, f: env)
+    out = o.run("a/b", "fix", "cr_tok")
+    assert out.state == "done"
+    assert env.up_secrets["GH_TOKEN"] == ""
+    argvs = [" ".join(a) for a, _ in env.gh_execs]
+    assert any("setup-git" in a for a in argvs)
+    assert any("push" in a for a in argvs)
+    assert any("pr create" in a for a in argvs)
+    assert all(e == {"GH_TOKEN": "gh"} for _, e in env.gh_execs)

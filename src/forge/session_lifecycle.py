@@ -11,6 +11,7 @@ from forge import lifecycle
 from forge import nextdev
 from forge.eventbus import published
 from forge.events import TurnEvent
+from forge.hostops import hardened_git
 
 
 class LifecycleOps:
@@ -86,31 +87,32 @@ class LifecycleOps:
         survives deletion. Returns True only if the push succeeds. Never raises
         — a failure just means 'keep the workspace and retry next sweep'.
 
-        Auth mirrors the worker: `gh auth setup-git` wires git's credential
-        helper to gh, which reads GH_TOKEN from the subprocess env — no token in
-        argv. The infra config.toml stays out of the commit (skip-worktree)."""
+        All git runs use hardened_git: the agent has modified this workspace,
+        so its .git/config is hostile input that must not execute host
+        commands. Auth mirrors the worker: the credential helper reads GH_TOKEN
+        from the subprocess env (a repo-scoped App token when configured, else
+        the PAT) — no token in argv."""
         run = self.store.get_run(run_id)
         ws = str(Path(self.cfg.runs_dir) / run_id / "workspace")
         branch = run.get("branch")
         if not branch or not Path(ws, ".git").is_dir():
             return False
         name, email = self._commit_identity(run_id)
-        token = {"GH_TOKEN": self.cfg.gh_token}
+        token = self._gh_env(run_id)
         try:   # archive the agent's work, not forge's runtime origin patch
             nextdev.unpatch_for_commit(self.host, ws)
         except Exception:
             pass
-        self.host.run(["git", "-C", ws, "config", "user.name", name])
-        self.host.run(["git", "-C", ws, "config", "user.email", email])
-        self.host.run(["git", "-C", ws, "add", "-A"])
+        self.host.run(hardened_git(ws, "config", "user.name", name))
+        self.host.run(hardened_git(ws, "config", "user.email", email))
+        self.host.run(hardened_git(ws, "add", "-A"))
         # commit may be a no-op (nothing to commit) — push still publishes HEAD.
         msg = f"forge: archive {run_id} before cleanup"
         trailer = self._commit_trailer(run_id)
         if trailer:
             msg += f"\n\n{trailer}"
-        self.host.run(["git", "-C", ws, "commit", "-m", msg])
-        self.host.run(["gh", "auth", "setup-git"], env=token)
-        push = self.host.run(["git", "-C", ws, "push", "-u", "origin", branch],
+        self.host.run(hardened_git(ws, "commit", "-m", msg))
+        push = self.host.run(hardened_git(ws, "push", "-u", "origin", branch),
                              env=token)
         return push.exit_code == 0
 

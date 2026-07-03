@@ -50,11 +50,17 @@ class ComposeEnv:
             raise RuntimeError(f"compose up failed (exit {out.returncode}): {msg}")
 
     def exec(self, argv: list, workdir: str = "/work",
-             service: str | None = None) -> ExecResult:
+             service: str | None = None, env: dict | None = None) -> ExecResult:
+        # `env` is for per-exec secrets (e.g. the GitHub token on push): the
+        # keys ride as name-only `-e KEY` flags and the values via the client
+        # process env — inside the exec'd process only, never argv, never the
+        # container's resident environment.
         svc = service or self.worker_service
         out = subprocess.run(
-            compose.exec_cmd(self.project, self.files, svc, argv, workdir),
-            capture_output=True, text=True)
+            compose.exec_cmd(self.project, self.files, svc, argv, workdir,
+                             env_keys=tuple(env or ())),
+            capture_output=True, text=True,
+            env={**os.environ, **env} if env else None)
         return ExecResult(out.returncode, out.stdout, out.stderr)
 
     def exec_detached(self, argv: list, workdir: str = "/work",

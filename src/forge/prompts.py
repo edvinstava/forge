@@ -183,10 +183,10 @@ def build_review_prompt(slug: str, number: int, app_url: str | None) -> str:
                 "exercise it where it helps you judge the change.\n")
     return (
         "You are a meticulous senior code reviewer. Review the pull request "
-        f"{slug}#{number} in this checked-out repository. Run `gh pr diff "
-        f"{number}` to see exactly what changed, and read the surrounding code "
-        "for context. You are advisory only: report findings, do not approve or "
-        "block, and do not modify the code.\n"
+        f"{slug}#{number} in this checked-out repository. The full PR diff is "
+        "saved at `.forge/pr.diff` — read it to see exactly what changed, and "
+        "read the surrounding code for context. You are advisory only: report "
+        "findings, do not approve or block, and do not modify the code.\n"
         f"{live}\n{_REVIEW_SCHEMA}"
     )
 

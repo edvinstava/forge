@@ -1,13 +1,13 @@
 import json
 import shlex
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from forge import commands as cmd
 from forge import envreg, lifecycle
 from forge.budget import BudgetTracker
 from forge.health import health_poll_argv
-from forge.orchestrator import RunOutcome
 from forge.plan import parse_plan
 from forge.probing import build_probe
 from forge.prompts import build_fix_prompt, build_plan_prompt, build_task_prompt
@@ -18,6 +18,15 @@ from forge.runspec import make_runspec
 from forge.verify import parse_verify
 from forge.worker import parse_worker_result
 from forge.hostops import exclude_forge_scratch
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    state: str
+    pr_url: str | None
+    draft: bool
+    reason: str | None
+    web_url: str | None = None
 
 
 def default_env_factory(run_id, files):
@@ -40,6 +49,12 @@ class ComposeOrchestrator:
 
     def _probe(self, ws) -> Probe:
         return build_probe(self.host, ws)
+
+    def _gh_env(self, repo_slug) -> dict:
+        """Per-exec GitHub token for forge's own git/gh execs — repo-scoped App
+        token when configured, else the PAT. The container env never holds it."""
+        from forge import ghapp
+        return {"GH_TOKEN": ghapp.worker_token(self.cfg, repo_slug)}
 
     def run(self, repo, task, run_id, policy=None, approve=None) -> RunOutcome:
         from forge import flow
@@ -91,8 +106,10 @@ class ComposeOrchestrator:
                              {"real": verify_plan.has_real_verification,
                               "cmds": [c.name for c in verify_plan.commands]})
 
+        # GH_TOKEN stays EMPTY in the container env (the worker runs untrusted
+        # repo code); forge's own git/gh execs get a token per exec (_gh_env).
         secrets = {"CLAUDE_CODE_OAUTH_TOKEN": self.cfg.oauth_token,
-                   "GH_TOKEN": self.cfg.gh_token,
+                   "GH_TOKEN": "",
                    "FORGE_SUPABASE_ANON_KEY": SUPABASE_LOCAL_ANON_KEY}
 
         for hc in recipe.host_pre:   # e.g. supabase start (best-effort)
@@ -105,7 +122,8 @@ class ComposeOrchestrator:
         try:
             env.up(secrets)
             self.store.set_state(run_id, "running")
-            env.exec(cmd.setup_git_cmd(), service="forge")  # authenticated push
+            env.exec(cmd.setup_git_cmd(), service="forge",  # authenticated push
+                     env=self._gh_env(repo))
 
             for svc, argv in recipe.seed:   # e.g. DHIS2 Route bootstrap
                 env.exec(argv, service=svc)
@@ -201,7 +219,8 @@ class ComposeOrchestrator:
         for cc in cmd.commit_cmds(f"forge: {rs.task}", name, email):
             env.exec(cc, service="forge")
 
-        push = env.exec(cmd.push_cmd(rs.branch), service="forge")
+        gh = self._gh_env(rs.repo)     # one token for the push + PR-create pair
+        push = env.exec(cmd.push_cmd(rs.branch), service="forge", env=gh)
         push_ok = push.exit_code == 0
         if not push_ok:
             rd.timeline(f"Push FAILED: {(push.stderr or push.stdout).strip()[:200]}")
@@ -219,7 +238,7 @@ class ComposeOrchestrator:
         pr_url = None
         if push_ok:
             pr = env.exec(cmd.pr_create_cmd(f"forge: {rs.task}", "/work/report.md", draft),
-                          service="forge")
+                          service="forge", env=gh)
             lines = pr.stdout.strip().splitlines()
             pr_url = lines[-1] if (pr.exit_code == 0 and lines) else None
             if pr_url is None:

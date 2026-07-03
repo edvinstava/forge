@@ -28,7 +28,7 @@ class FakeEnv:
     def up(self, secrets):
         type(self).up_calls += 1
 
-    def exec(self, argv, service=None, workdir="/work"):
+    def exec(self, argv, service=None, workdir="/work", env=None):
         from forge.container import ExecResult
         joined = " ".join(argv)
         if "status" in joined and "--porcelain" in joined:
@@ -350,11 +350,11 @@ class _HealthEnv(FakeEnv):
     """Health passes only when health_ok is set (set per-instance by the factory)."""
     health_ok = False
 
-    def exec(self, argv, service=None, workdir="/work"):
+    def exec(self, argv, service=None, workdir="/work", env=None):
         from forge.container import ExecResult
         if "curl -fs" in " ".join(argv):                 # the health poll
             return ExecResult(0 if self.health_ok else 1, "", "")
-        return super().exec(argv, service=service, workdir=workdir)
+        return super().exec(argv, service=service, workdir=workdir, env=env)
 
 
 def test_health_failure_triggers_repair_and_retry(tmp_path, monkeypatch):
@@ -540,11 +540,11 @@ def test_turn_persists_verify_failure_output(tmp_path):
     mgr, store = _mgr(tmp_path)
 
     class FailingVerifyEnv(FakeEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if argv[:2] == ["npm", "test"]:
                 return ExecResult(1, "FAIL src/x.test.ts\n", "1 test failed\n")
-            return super().exec(argv, service=service, workdir=workdir)
+            return super().exec(argv, service=service, workdir=workdir, env=env)
 
     mgr.env_factory = lambda rid, files: FailingVerifyEnv(rid, files)
     list(mgr.start("r1", "o/r", "github"))
@@ -857,7 +857,7 @@ def test_open_pr_commit_message_carries_coauthor_trailer(tmp_path, monkeypatch):
     recorded = []
 
     class RecEnv(FakeEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             recorded.append(argv)
             return FakeEnv.exec(self, argv, service, workdir)
 
@@ -938,7 +938,7 @@ def test_open_pr_no_changes(tmp_path):
     orig_factory = mgr.env_factory
 
     class NoChangesEnv(FakeEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             joined = " ".join(argv)
             if "status" in joined and "--porcelain" in joined:
                 return ctr.ExecResult(0, "", "")
@@ -958,7 +958,7 @@ def test_turn_counts_untracked_files_via_intent_to_add(tmp_path):
     list(mgr.start("r1", "o/r", "github"))
 
     class NewFileEnv(FakeEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             joined = " ".join(argv)
             if "diff" in joined and "--name-only" in joined:
@@ -1091,7 +1091,7 @@ class _VerifyFailEnv(FakeEnv):
         super().__init__(run_id, files)
         self.calls = []
 
-    def exec(self, argv, service=None, workdir="/work"):
+    def exec(self, argv, service=None, workdir="/work", env=None):
         from forge.container import ExecResult
         self.calls.append(list(argv))
         if argv[:2] == ["npm", "test"]:
@@ -1155,7 +1155,7 @@ def test_repair_runs_formatter_before_verifying(tmp_path):
             super().__init__(rid, files)
             self.calls = []
 
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             self.calls.append(list(argv))
             return super().exec(argv, service=service, workdir=workdir)
 
@@ -1474,7 +1474,7 @@ def test_repair_reaches_green_after_fixes(tmp_path):
                       has_real_verification=True, format_fix=None)
 
     class FlakyEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             joined = " ".join(argv)
             if "run-tests" in joined:
@@ -1493,7 +1493,7 @@ def test_repair_exhausts_and_returns_failures(tmp_path):
     from forge.verify import VerifyPlan, VerifyCmd
 
     class AlwaysRedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-tests" in " ".join(argv):
                 return ExecResult(1, "still broken", "")
@@ -1532,7 +1532,7 @@ def test_execute_escalates_when_repair_exhausts(tmp_path):
         has_real_verification=True, format_fix=None)
 
     class RedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-tests" in " ".join(argv):
                 return ExecResult(1, "red", "")
@@ -1562,7 +1562,7 @@ def test_respond_repair_escalation_abort(tmp_path):
         has_real_verification=True, format_fix=None)
 
     class RedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-tests" in " ".join(argv):
                 return ExecResult(1, "red", "")
@@ -1599,7 +1599,7 @@ def test_repair_escalation_retry_threads_guidance_into_fix_prompt(tmp_path):
     fix_prompts = []
 
     class RedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if argv and argv[0] == "claude" and "-p" in argv:
                 # argv[2] is the prompt (["claude", "-p", <prompt>, ...])
@@ -1838,7 +1838,7 @@ def test_retrospective_saves_lessons_to_overlay(tmp_path):
     store.create_env("r1", "forge-r1", None, 3000, "live", web_service="web")
 
     class LessonEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if argv[:2] == ["claude", "-p"]:           # the retrospective worker turn
                 d = Path(self._ws); (d / ".forge").mkdir(parents=True, exist_ok=True)
@@ -1885,7 +1885,7 @@ def test_qa_gate_bottoms_out_when_fix_breaks_ci(tmp_path):
 
     class CiFailEnv(QaEnv):
         """QA worker writes a failing qa.json; lint command always exits 1."""
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-lint" in " ".join(argv):
                 return ExecResult(1, "lint broke", "")
@@ -1994,7 +1994,7 @@ def test_retrospective_lesson_reaches_later_run_planner(tmp_path):
         - else: delegate to PlannerEnv defaults.
         """
 
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if argv[:2] == ["claude", "-p"]:
                 # Retrospective worker: write the lesson that should propagate to Run B
@@ -2086,7 +2086,7 @@ def test_autonomous_verify_bottom_out_opens_draft_pr(tmp_path):
         has_real_verification=True, format_fix=None)
 
     class RedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-tests" in " ".join(argv):
                 return ExecResult(1, "red", "")
@@ -2116,7 +2116,7 @@ def test_non_autonomous_verify_bottom_out_still_escalates(tmp_path):
         has_real_verification=True, format_fix=None)
 
     class RedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-tests" in " ".join(argv):
                 return ExecResult(1, "red", "")
@@ -2296,7 +2296,7 @@ def test_auto_draft_verify_bottom_out_opens_draft_pr(tmp_path):
         has_real_verification=True, format_fix=None)
 
     class RedEnv(PlannerEnv):
-        def exec(self, argv, service=None, workdir="/work"):
+        def exec(self, argv, service=None, workdir="/work", env=None):
             from forge.container import ExecResult
             if "run-tests" in " ".join(argv):
                 return ExecResult(1, "red", "")
@@ -2511,3 +2511,92 @@ def test_delete_dormant_records_reason(tmp_path):
     mgr._archive_code = lambda rid: True            # skip real git archive
     assert mgr.delete_dormant("r1") is True
     assert store.get_env("r1")["state_reason"] == "dormant"
+
+
+# --- GitHub-token containment (the worker never holds the PAT) -------------
+
+def test_worker_container_env_carries_no_github_token(tmp_path):
+    # The worker runs untrusted repo code with permission gates disabled; no
+    # GitHub token may sit in its environment. The key stays (empty) so the
+    # compose ${GH_TOKEN} interpolation is quiet.
+    mgr, _store = _mgr(tmp_path)
+    assert mgr._secrets()["GH_TOKEN"] == ""
+
+
+def test_git_execs_receive_a_per_exec_token(tmp_path):
+    # forge's own git/gh execs (credential setup, push, PR create) get the
+    # token injected per exec — the PAT fallback when no App is configured.
+    gh_execs = []
+
+    class RecordingEnv(FakeEnv):
+        def exec(self, argv, service=None, workdir="/work", env=None):
+            if env is not None:
+                gh_execs.append((list(argv), dict(env)))
+            return super().exec(argv, service=service, workdir=workdir)
+
+    cfg = Config(runs_dir=tmp_path / "runs", oauth_token="t", gh_token="ghp_pat",
+                 budget=Budget(max_iterations=2, max_wall_secs=60))
+    store = Store(cfg.runs_dir / "forge.db")
+    mgr = SessionManager(cfg, store, FakeHost(),
+                         env_factory=lambda rid, files: RecordingEnv(rid, files))
+    list(mgr.start("r1", "o/r", "github"))
+    list(mgr.turn("r1", "change"))
+    assert mgr.open_pr("r1")["ok"] is True
+    argvs = [" ".join(a) for a, _ in gh_execs]
+    assert any(a.startswith("gh auth setup-git") for a in argvs)
+    assert any("push" in a for a in argvs)
+    assert any("pr create" in a for a in argvs)
+    assert all(e == {"GH_TOKEN": "ghp_pat"} for _, e in gh_execs)
+
+
+def test_git_execs_use_scoped_app_token_when_app_configured(tmp_path, monkeypatch):
+    from forge import ghapp
+    seen = {}
+
+    def fake_worker_token(cfg, slug, app=None):
+        seen["slug"] = slug
+        return "ghs_scoped"
+    monkeypatch.setattr(ghapp, "worker_token", fake_worker_token)
+    gh_execs = []
+
+    class RecordingEnv(FakeEnv):
+        def exec(self, argv, service=None, workdir="/work", env=None):
+            if env is not None:
+                gh_execs.append(dict(env))
+            return super().exec(argv, service=service, workdir=workdir)
+
+    cfg = Config(runs_dir=tmp_path / "runs", oauth_token="t", gh_token="ghp_pat",
+                 budget=Budget(max_iterations=2, max_wall_secs=60))
+    store = Store(cfg.runs_dir / "forge.db")
+    mgr = SessionManager(cfg, store, FakeHost(),
+                         env_factory=lambda rid, files: RecordingEnv(rid, files))
+    list(mgr.start("r1", "o/r", "github"))
+    assert seen["slug"] == "o/r"
+    assert gh_execs and all(e == {"GH_TOKEN": "ghs_scoped"} for e in gh_execs)
+
+
+def test_archive_code_hardens_host_git(tmp_path):
+    # Host-side git against a workspace the agent has modified treats the
+    # repo's .git/config as hostile input: core.fsmonitor / core.hooksPath /
+    # credential.helper could otherwise execute arbitrary commands ON THE HOST.
+    mgr, store = _mgr(tmp_path)
+    list(mgr.start("r1", "o/r", "github"))
+    mgr.sleep("r1")
+    ws = tmp_path / "runs" / "r1" / "workspace"
+    (ws / ".git").mkdir(parents=True, exist_ok=True)
+    git_calls = []
+
+    class RecordingHost(FakeHost):
+        def run(self, argv, env=None):
+            from forge.container import ExecResult
+            if argv[:1] == ["git"]:
+                git_calls.append(list(argv))
+            return ExecResult(0, "", "")
+
+    mgr.host = RecordingHost()
+    assert mgr.delete_dormant("r1") is True
+    assert git_calls
+    for argv in git_calls:
+        joined = " ".join(argv)
+        assert "core.fsmonitor=false" in joined, argv
+        assert "core.hooksPath=/dev/null" in joined, argv

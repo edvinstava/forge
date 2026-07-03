@@ -1,7 +1,9 @@
-"""GitHub App identity + installation-token minting. Used ONLY to post reviews
-as forge[bot] and to resolve the bot commit identity — never for reasoning.
-HTTP + JWT signing are injected so tests stay hermetic; the real signer imports
-PyJWT lazily (optional `gh-app` extra) so degradation works without it."""
+"""GitHub App identity + installation-token minting — never for reasoning.
+Used to post reviews as the app bot, resolve the bot commit identity, and mint
+the short-lived single-repo tokens the worker's git/gh execs run with (see
+worker_token). HTTP + JWT signing are injected so tests stay hermetic; the real
+signer imports PyJWT lazily (optional `gh-app` extra) so degradation works
+without it."""
 import json
 import time
 import urllib.parse
@@ -28,7 +30,7 @@ def _default_signer(app_id: str, key_pem: str, now: int) -> str:
     except ImportError as e:  # pragma: no cover - exercised only without the dep
         raise RuntimeError(
             "GitHub App configured but PyJWT missing — install the 'gh-app' "
-            "extra: pip install 'forge[gh-app]'") from e
+            "extra: pip install 'edvin-not-devin[gh-app]'") from e
     payload = {"iat": now - 60, "exp": now + 540, "iss": str(app_id)}
     return jwt.encode(payload, key_pem, algorithm="RS256")
 
@@ -62,9 +64,12 @@ class GhApp:
         jwt_tok = self._jwt()
         inst = self.http("GET", f"{_API}/repos/{owner}/{repo}/installation",
                          jwt_tok, None)
+        # Scope the token to the single repo: it authenticates git pushes run
+        # inside the worker container, where untrusted repo code executes — a
+        # captured token must reach nothing beyond the repo it came from.
         tok = self.http("POST",
                         f"{_API}/app/installations/{inst['id']}/access_tokens",
-                        jwt_tok, {})
+                        jwt_tok, {"repositories": [repo]})
         # Cache for ~50 min (real expiry is 1h); parse expires_at when present.
         self._tok_cache[(owner, repo)] = (tok["token"], now + 3000)
         return tok["token"]
@@ -88,3 +93,20 @@ class GhApp:
         webhook config is what makes them viable — no manual settings edit."""
         self.http("PATCH", f"{_API}/app/hook/config", self._jwt(),
                   {"url": url, "content_type": "json", "secret": secret})
+
+
+def worker_token(cfg, repo_slug: str, app=None) -> str:
+    """The GitHub token forge's own git/gh execs run with (credential setup,
+    push, PR create). With the App configured this is a short-lived
+    installation token scoped to just `repo_slug` — untrusted repo code that
+    captures it reaches only that repo, for at most an hour. The PAT is the
+    fallback (no App, no owner/repo slug, or any minting failure): an App
+    outage must never block a push. Pass `app` to reuse a caller's GhApp (and
+    its token cache); otherwise one is built from cfg when configured."""
+    if repo_slug and "/" in repo_slug and (app is not None or is_configured(cfg)):
+        owner, repo = repo_slug.split("/", 1)
+        try:
+            return (app or GhApp(cfg)).installation_token(owner, repo)
+        except Exception:
+            pass
+    return cfg.gh_token

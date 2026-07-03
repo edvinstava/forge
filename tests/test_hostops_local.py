@@ -223,3 +223,19 @@ def test_exclude_covers_attachment_inbox(tmp_path):
 
     content = (ws / ".git" / "info" / "exclude").read_text()
     assert ".forge/inbox/" in content, ".forge/inbox/ pattern missing from exclude file"
+
+
+def test_hardened_git_neutralizes_repo_config_execution_vectors():
+    # Host-side git against an agent-modified workspace: the repo's .git/config
+    # is hostile input — fsmonitor, hooksPath and credential.helper can each
+    # execute arbitrary commands on the host. hardened_git overrides all three
+    # (and re-adds gh as the only credential helper so pushes still auth).
+    from forge.hostops import hardened_git
+    argv = hardened_git("/ws", "push", "-u", "origin", "b")
+    assert argv[0] == "git"
+    assert argv[-6:] == ["-C", "/ws", "push", "-u", "origin", "b"]
+    cvals = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"]
+    assert "core.fsmonitor=false" in cvals
+    assert "core.hooksPath=/dev/null" in cvals
+    assert cvals.index("credential.helper=") \
+        < cvals.index("credential.helper=!gh auth git-credential")
