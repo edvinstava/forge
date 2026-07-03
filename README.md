@@ -1,7 +1,9 @@
-# edvin-not-devin
+# Forge
 
-**A personal, vibe-coded AI coding coworker you drive from Slack or a web chat.**
-(Edvin, not Devin.) Point it at a GitHub repo and a task; it plans the change,
+**Autonomous software engineering, running on your own machine.**
+(Yes, it's *Edvin, not Devin*.)
+
+Point it at a GitHub repo and a task from Slack or a web chat; it plans the change,
 brings the app up in a disposable Docker environment, edits the code, verifies it
 (tests / lint / build), browser-tests the result with screenshots, and opens a pull
 request that reads like a colleague's — all on **your Claude or ChatGPT
@@ -15,11 +17,6 @@ clickable URL so you can see the change live.
 > power tool for one developer's laptop, not a multi-tenant platform. Read the
 > [security model](#security-model) before pointing it at repositories you don't
 > trust, and use it at your own risk.
->
-> **Naming note:** the project started life as *forge* and the internals keep that
-> name — the short CLI command is `forge` (installed alongside `edvin-not-devin`),
-> config lives in `~/.forge/`, and env vars are `FORGE_*`. The examples below use
-> the short command.
 
 ---
 
@@ -66,7 +63,7 @@ you: "fix the off-by-one in the date picker on the webapp repo"
 ## Install
 
 ```bash
-git clone https://github.com/edvinstava/edvin-not-devin && cd edvin-not-devin
+git clone https://github.com/edvinstava/forge && cd forge
 
 # 1. Install forge with the extras you want (web UI + Slack shown here).
 pip install -e ".[web,slack]"        # or: uv sync --extra web --extra slack

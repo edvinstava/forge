@@ -30,7 +30,7 @@ def _default_signer(app_id: str, key_pem: str, now: int) -> str:
     except ImportError as e:  # pragma: no cover - exercised only without the dep
         raise RuntimeError(
             "GitHub App configured but PyJWT missing — install the 'gh-app' "
-            "extra: pip install 'edvin-not-devin[gh-app]'") from e
+            "extra: pip install -e '.[gh-app]'") from e
     payload = {"iat": now - 60, "exp": now + 540, "iss": str(app_id)}
     return jwt.encode(payload, key_pem, algorithm="RS256")
 
