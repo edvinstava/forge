@@ -226,8 +226,9 @@ def from_config(cfg) -> "ClaudeProvider | CodexProvider":
 
 
 def host_env(provider, cfg) -> dict:
-    """Extra env for running the provider CLI on the HOST (Slack chat/opener/
-    repo-QA one-shots): its auth secret(s), with empty values dropped so the
-    CLI falls back to its own stored login (~/.codex, claude keychain) —
-    subscription-first there too."""
+    """Extra env for running the provider CLI on the HOST (Slack chat/opener
+    one-shots — conversational turns with no repo checkout; repo Q&A runs
+    containerized, see slackqa): its auth secret(s), with empty values dropped
+    so the CLI falls back to its own stored login (~/.codex, claude keychain)
+    — subscription-first there too."""
     return {k: v for k, v in provider.secrets(cfg).items() if v}

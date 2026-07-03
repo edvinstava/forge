@@ -385,9 +385,11 @@ repositories they trust.** Understand these properties before exposing it more w
   into the repo), and QA credentials are stored `chmod 600` under `~/.forge/knowledge`
   and redacted from logs, transcripts, and Slack. The GitHub webhook uses timing-safe
   HMAC verification with replay dedup.
-- **Known rough edges** (documented, not fixed): the Slack "ask a question about a
-  repo" path runs the agent on the host against a fresh clone, not in a container;
-  and `~/.codex` is mounted read-write into the worker when using the Codex
+- **Repo Q&A is containerized too.** The Slack "ask a question about a repo" path
+  runs its one-shot agent in a disposable worker container with the clone mounted
+  read-only — not on the host.
+- **Known rough edge** (documented, not fixed): `~/.codex` is mounted read-write
+  into worker containers (including the Q&A one-shot) when using the Codex
   provider (its CLI refreshes the auth file in place).
 
 Found a security issue? It's a personal project — please open an issue.

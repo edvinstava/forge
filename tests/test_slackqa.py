@@ -7,7 +7,8 @@ from forge.slackqa import qa_dir, needs_clone, answer_question
 
 def _cfg(tmp_path):
     return SimpleNamespace(runs_dir=tmp_path, gh_token="t", oauth_token="o",
-                           repo_cache_ttl_secs=3600)
+                           repo_cache_ttl_secs=3600, image_tag="forge-worker",
+                           provider="claude", codex_auth="auto", openai_api_key="")
 
 
 def test_qa_dir_is_under_cache_qa(tmp_path):
@@ -53,13 +54,61 @@ class FakeRun:
         return SimpleNamespace(returncode=0, stdout=self._claude, stderr="")
 
 
+def _docker_calls(run):
+    return [c for c in run.calls if c[0][0] == "docker"]
+
+
 def test_answer_clones_then_asks(tmp_path):
     run = FakeRun()
     out = answer_question(_cfg(tmp_path), "acme/x", "what version?",
                           run=run, clock=lambda: 100.0)
     assert out == "You're on 2.41.3."
     assert any(c[0][:3] == ["gh", "repo", "clone"] for c in run.calls)
-    assert any(c[0][0] == "claude" for c in run.calls)
+    assert len(_docker_calls(run)) == 1
+
+
+def test_answer_runs_agent_in_disposable_readonly_container(tmp_path):
+    cfg = _cfg(tmp_path)
+    run = FakeRun()
+    answer_question(cfg, "acme/x", "what version?", run=run, clock=lambda: 100.0)
+    argv, kw = _docker_calls(run)[0]
+    assert argv[:3] == ["docker", "run", "--rm"]
+    d = qa_dir(cfg, "acme/x")
+    assert f"{d}:/work:ro" in argv                 # clone mounted read-only
+    assert "forge-worker" in argv                  # cfg.image_tag
+    i = argv.index("--entrypoint")                 # image ENTRYPOINT is sleep;
+    assert argv[i + 1] == "claude"                 # run the agent CLI instead
+    assert any("what version?" in a for a in argv)  # prompt reaches the CLI
+    assert "cwd" not in kw                         # workdir lives in the container
+
+
+def test_answer_keeps_secrets_out_of_argv(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.oauth_token = "sekrit-tok"
+    run = FakeRun()
+    answer_question(cfg, "acme/x", "q", run=run, clock=lambda: 100.0)
+    argv, kw = _docker_calls(run)[0]
+    assert "sekrit-tok" not in " ".join(argv)      # never in argv (ps-visible)
+    i = argv.index("-e")
+    assert argv[i + 1] == "CLAUDE_CODE_OAUTH_TOKEN"    # name-only flag
+    assert kw["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sekrit-tok"  # value via env
+
+
+def test_answer_mounts_codex_plan_auth(tmp_path, monkeypatch):
+    home = tmp_path / "codexhome"
+    home.mkdir()
+    (home / "auth.json").write_text("{}")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    cfg = _cfg(tmp_path)
+    cfg.provider = "codex"
+    run = FakeRun(claude_stdout=json.dumps(
+        {"type": "turn.completed", "usage": {}}))
+    answer_question(cfg, "acme/x", "q", run=run, clock=lambda: 100.0)
+    argv, kw = _docker_calls(run)[0]
+    assert f"{home}:/home/forge/.codex" in argv    # plan auth rides the mount
+    i = argv.index("--entrypoint")
+    assert argv[i + 1] == "codex"
+    assert kw["env"]["OPENAI_API_KEY"] == ""       # suppressed → bill the plan
 
 
 def test_answer_reuses_fresh_clone(tmp_path):
