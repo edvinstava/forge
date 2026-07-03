@@ -92,6 +92,63 @@ def test_merge_qa_credentials_by_role_replaces_same_role_keeps_others():
         {"role": "user", "username": "u@x", "password": "u"}]
 
 
+def test_validate_accepts_synthesis_keys():
+    ov = {"image": "python:3.12-slim",
+          "setup_cmds": ["pip install -e .", "python manage.py migrate"],
+          "dev_cmd": "python manage.py runserver 0.0.0.0:8000",
+          "web_port": 8000,
+          "services": {"db": {"image": "postgres:16",
+                              "environment": {"POSTGRES_PASSWORD": "forge"}},
+                       "cache": {"image": "redis:7",
+                                 "command": "redis-server --appendonly no"}}}
+    assert validate(ov) == ov
+
+
+def test_validate_rejects_bad_image_and_setup_cmds():
+    with pytest.raises(ValueError):
+        validate({"image": ""})                       # empty
+    with pytest.raises(ValueError):
+        validate({"image": "python:3 12"})            # whitespace
+    with pytest.raises(ValueError):
+        validate({"setup_cmds": "pip install ."})     # not a list
+    with pytest.raises(ValueError):
+        validate({"setup_cmds": [1]})                 # not strings
+
+
+def test_validate_services_containment():
+    # Only image/environment/command allowed: no volumes (host mounts), no
+    # ports (nothing published), no privileged. Names can't collide with the
+    # web/forge services Forge injects.
+    with pytest.raises(ValueError):
+        validate({"services": {"db": {"image": "postgres:16",
+                                      "volumes": ["/:/host"]}}})
+    with pytest.raises(ValueError):
+        validate({"services": {"db": {"image": "postgres:16",
+                                      "ports": ["5432:5432"]}}})
+    with pytest.raises(ValueError):
+        validate({"services": {"db": {"environment": {}}}})   # image required
+    with pytest.raises(ValueError):
+        validate({"services": {"web": {"image": "postgres:16"}}})
+    with pytest.raises(ValueError):
+        validate({"services": {"forge": {"image": "postgres:16"}}})
+    with pytest.raises(ValueError):
+        validate({"services": {"Bad Name": {"image": "postgres:16"}}})
+    with pytest.raises(ValueError):
+        validate({"services": [{"image": "postgres:16"}]})    # not a mapping
+
+
+def test_merge_overlay_services_and_setup_cmds_replace_wholesale():
+    # Partial merges of ordered command lists / service maps are ambiguous —
+    # the newest description of the environment wins outright.
+    base = {"setup_cmds": ["pip install -e ."],
+            "services": {"db": {"image": "postgres:15"}}}
+    delta = {"setup_cmds": ["pip install -r requirements.txt"],
+             "services": {"cache": {"image": "redis:7"}}}
+    m = merge_overlay(base, delta)
+    assert m["setup_cmds"] == ["pip install -r requirements.txt"]
+    assert m["services"] == {"cache": {"image": "redis:7"}}
+
+
 def test_user_lessons_survive_the_cap():
     # A teammate's explicit instruction outranks auto-learned lessons: when the
     # cap trims, only retrospective lessons are evicted.
@@ -105,3 +162,24 @@ def test_user_lessons_survive_the_cap():
     assert "user rule" in texts          # pinned
     assert "auto new" in texts           # newest auto kept
     assert "auto 0" not in texts         # oldest auto evicted
+
+
+def test_validate_web_port_env_and_dev_cmd_types():
+    # These feed int()/dict()/f-strings during synthesis — reject garbage at
+    # the validation boundary (probe output, env.yml) so a bad agent emission
+    # degrades to "learned nothing" instead of crashing provisioning.
+    assert validate({"web_port": 8000})["web_port"] == 8000
+    assert validate({"web_port": "8000"})["web_port"] == "8000"   # digit-str ok
+    with pytest.raises(ValueError):
+        validate({"web_port": "eight thousand"})
+    with pytest.raises(ValueError):
+        validate({"web_port": 0})
+    with pytest.raises(ValueError):
+        validate({"web_port": 70000})
+    with pytest.raises(ValueError):
+        validate({"env": ["FOO=bar"]})                # list form rejected
+    with pytest.raises(ValueError):
+        validate({"env": {"FOO": {"nested": 1}}})     # non-scalar value
+    assert validate({"env": {"FOO": "bar", "N": 3}})["env"]["N"] == 3
+    with pytest.raises(ValueError):
+        validate({"dev_cmd": ["python", "app.py"]})   # must be a string

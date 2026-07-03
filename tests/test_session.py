@@ -2600,3 +2600,37 @@ def test_archive_code_hardens_host_git(tmp_path):
         joined = " ".join(argv)
         assert "core.fsmonitor=false" in joined, argv
         assert "core.hooksPath=/dev/null" in joined, argv
+
+
+def test_probe_learns_full_synthesis_and_spins_up_app(tmp_path, monkeypatch):
+    # The "spin up anything" path: a repo with NO recognized marker (no
+    # package.json / supabase / compose) provisions end-to-end because the probe
+    # agent read the repo and described the environment; the resolver
+    # synthesizes a runnable compose from that overlay.
+    import json
+    from forge import envprobe
+    cfg = Config(runs_dir=tmp_path / "runs", oauth_token="t", gh_token="g",
+                 knowledge_dir=tmp_path / "kb",
+                 budget=Budget(max_iterations=2, max_wall_secs=60))
+    store = Store(cfg.runs_dir / "forge.db")
+    monkeypatch.setattr(envprobe, "probe", lambda *a, **k: {
+        "image": "python:3.12-slim",
+        "setup_cmds": ["pip install -e ."],
+        "dev_cmd": "python -m app",
+        "web_port": 8000,
+        "services": {"db": {"image": "postgres:16",
+                            "environment": {"POSTGRES_PASSWORD": "forge"}}}})
+    mgr = SessionManager(cfg, store, _NoAppHost(),
+                         env_factory=lambda rid, files: FakeEnv(rid, files))
+    events = list(mgr.start("r1", "o/r", "github"))
+    assert events[-1].kind == "url"                     # app is fronted, not worker-only
+    labels = [e.data.get("label") for e in events if e.kind == "phase"]
+    assert "Recipe: synthesized" in labels              # re-resolve surfaced to the user
+    compose = json.loads((tmp_path / "runs" / "r1" / "forge-compose.yml").read_text())
+    web = compose["services"]["web"]
+    assert web["image"] == "python:3.12-slim"
+    assert "pip install -e ." in web["command"][0]
+    assert "PORT=8000 python -m app" in web["command"][0]
+    assert compose["services"]["db"]["image"] == "postgres:16"
+    facts = json.loads(store.get_env("r1")["runtime_facts"])
+    assert facts["stack"] == "synthesized" and facts["dev_cmd"] == "python -m app"

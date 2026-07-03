@@ -178,31 +178,41 @@ Claude runs on the subscription only.)
 
 ## Recipes (how a repo's stack comes up)
 
-The tool resolves a **recipe** — how to stand the app up — by inspecting the cloned repo.
-Resolution is deterministic, first match wins:
+The tool resolves a **recipe** — how to stand the app up — by inspecting the cloned
+repo. Fast deterministic markers first, and when none match, an **AI probe reads the
+repo like a developer would** — README, manifests of any ecosystem, the code itself —
+and synthesizes a recipe from what it learns. First match wins:
 
-1. **CHAP** markers → `dhis2-chap` (a multi-repo DHIS2 + chap-core stack)
-2. `supabase/config.toml` + a Next.js `package.json` → `next-supabase`
-3. any `package.json` with a dev/start script → `node-web`
-4. the repo's own `docker-compose.yml` → wrap it
-5. otherwise → `none`
+1. a committed `.forge/env.yml` that declares the app → **synthesized** from it
+2. **CHAP** markers → `dhis2-chap` (a multi-repo DHIS2 + chap-core stack)
+3. `supabase/config.toml` + a Next.js `package.json` → `next-supabase`
+4. any `package.json` → `node-web`
+5. the repo's own `docker-compose.yml` → wrap it
+6. no marker at all → the AI probe inspects the repo and emits an overlay
+   (base image, apt packages, setup commands, dev command, port, extra service
+   containers like postgres/redis) → **synthesized**
+7. a probe that finds nothing servable → `none` (worker only)
 
-An **AI probe** then fills gaps a static recipe can't know (the real dev command,
-health path, extra apt packages) and persists what it learns to the repo's knowledge
-overlay, so the next run starts smarter.
+That synthesis step is what lets forge spin up **just about anything** — Python, Go,
+Rust, Ruby, JVM, PHP, static sites — not only stacks it has templates for. The probe
+persists what it learns to the repo's per-repo knowledge overlay, so the next run
+starts instantly; the same overlay-delta loop repairs the environment when a start
+fails (wrong port, missing system lib, missing db container).
 
 | Recipe | What it stands up | Status |
 |---|---|---|
 | `node-web` | the repo's dev server + a worker | ✅ validated end-to-end on real Docker |
+| `synthesized` | any stack, from the AI probe's (or a committed `.forge/env.yml`) description: app container + optional db/cache containers | ⚙️ generated + unit-tested; quality tracks the probe |
 | `none` | worker only — edit + verify + PR, no live URL | ✅ validated |
 | `next-supabase` | Next dev server + worker; Supabase via the local CLI, with a per-session `project_id` + port block | ⚙️ generated + unit-tested; a live run needs your Supabase CLI + app |
 | `dhis2-chap` | DHIS2 + chap-core + the modeling app on one network, seeded with demo data | ⚙️ generated from verified upstream topology; needs `forge bake` + live validation |
 
-> **Honest limitation:** "any stack" means the *edit → verify → PR* loop works
-> anywhere. Standing up a **live app** currently requires one of the recipes above; a
-> repo with no `package.json` and no `docker-compose.yml` (e.g. a bare Python/Go
-> service) falls to `none` and gets no preview URL. Teaching forge new stack templates
-> is the main extension point.
+> **Scope, honestly:** synthesized recipes cover the common case — one app process
+> plus supporting containers. A repo whose dev environment needs host hardware,
+> licensed SDKs, or a cloud account still lands on `none` (the *edit → verify → PR*
+> loop works there regardless). Repos with exotic topologies can commit a
+> `.forge/env.yml` (same keys as the overlay) or their own compose file and skip
+> inference entirely.
 
 **Heavy stacks** need cached seed data so a per-run instance comes up fast:
 
@@ -413,7 +423,8 @@ src/forge/
   cli.py                    forge run / status / down / serve / bake / web / review / attach
   session.py                SessionManager: concurrent session lifecycle, turn guard
   compose_orchestrator.py   the one-shot run loop: clone → up → worker → verify → PR
-  recipe.py                 repo → recipe (node-web / next-supabase / dhis2-chap / none)
+  recipe.py                 repo → recipe (node-web / next-supabase / dhis2-chap /
+                            synthesized-from-overlay / none)
   compose*.py               multi-service Compose engine (per-run project)
   envprobe.py, knowledge.py AI environment probe + per-repo learning overlays
   verify.py, qa.py          verify-gate + acceptance/browser QA

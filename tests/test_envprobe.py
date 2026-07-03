@@ -43,3 +43,38 @@ def test_repair_includes_failure_context_in_prompt():
     assert out["apt"] == ["libglib2.0-0"]
     prompt = next(a[2] for a, s in env.calls if a[:1] == ["claude"])
     assert "verify" in prompt and "libglib" in prompt
+
+
+def test_probe_prompt_is_stack_agnostic():
+    # The probe must be told to understand ANY repo — README first, manifests
+    # across ecosystems, code — and be able to describe a full environment
+    # (image, setup steps, extra services), not just patch a JS one.
+    env = FakeEnv("dev_cmd: go run .\nweb_port: 8080\n")
+    envprobe.probe(env, model=None, max_iterations=4)
+    prompt = next(a[2] for a, s in env.calls if a[:1] == ["claude"])
+    for needle in ("README", "pyproject.toml", "go.mod", "Cargo.toml",
+                   "image", "setup_cmds", "dev_cmd", "web_port", "services",
+                   "foreground", "0.0.0.0"):
+        assert needle in prompt, needle
+
+
+def test_probe_accepts_full_synthesis_overlay():
+    env = FakeEnv(
+        "image: python:3.12-slim\n"
+        "setup_cmds: ['pip install -e .']\n"
+        "dev_cmd: python -m app\n"
+        "web_port: 8000\n"
+        "services:\n  db:\n    image: postgres:16\n"
+        "    environment: {POSTGRES_PASSWORD: forge}\n")
+    out = envprobe.probe(env, model=None, max_iterations=4)
+    assert out["image"] == "python:3.12-slim"
+    assert out["services"]["db"]["image"] == "postgres:16"
+
+
+def test_repair_prompt_offers_synthesis_keys():
+    env = FakeEnv("setup_cmds: ['bundle install']\n")
+    envprobe.repair(env, "health", "no server on :4567", model=None,
+                    max_iterations=4)
+    prompt = next(a[2] for a, s in env.calls if a[:1] == ["claude"])
+    for needle in ("image", "setup_cmds", "services"):
+        assert needle in prompt, needle

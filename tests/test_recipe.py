@@ -1,7 +1,8 @@
 import json
 
-from forge.recipe import (SUPABASE_LOCAL_ANON_KEY, Probe, dhis2_chap_recipe,
-                          next_supabase_recipe, node_web_recipe, resolve)
+from forge.recipe import (SUPABASE_LOCAL_ANON_KEY, Probe, apply_overlay,
+                          dhis2_chap_recipe, next_supabase_recipe,
+                          node_web_recipe, resolve, synthesized_recipe)
 
 
 def test_node_web_recipe_structure():
@@ -468,3 +469,150 @@ def test_resolve_prefers_node_web_over_incidental_compose():
 def test_resolve_repo_compose_collision_falls_back_to_none():
     p = Probe(repo_compose_text="services:\n  forge:\n    image: x\n")
     assert resolve(p, "/ws", "img").name == "none"
+
+
+# --- synthesized recipes: spin up anything from a learned/committed overlay ---
+
+def _synth_overlay(**extra):
+    ov = {"image": "python:3.12-slim",
+          "setup_cmds": ["pip install -e ."],
+          "dev_cmd": "python manage.py runserver 0.0.0.0:8000",
+          "web_port": 8000,
+          "health_path": "/healthz",
+          "env": {"DATABASE_URL": "postgresql://forge:forge@db:5432/app"},
+          "apt": ["libpq5"],
+          "services": {"db": {"image": "postgres:16",
+                              "environment": {"POSTGRES_USER": "forge",
+                                              "POSTGRES_PASSWORD": "forge",
+                                              "POSTGRES_DB": "app"}}}}
+    ov.update(extra)
+    return ov
+
+
+def test_synthesized_recipe_structure():
+    r = synthesized_recipe("/ws", "forge-worker", _synth_overlay())
+    assert r.name == "synthesized" and r.multi and r.confidence == "high"
+    assert r.web_service == "web" and r.web_port == 8000
+    assert r.health_path == "/healthz"
+    svc = r.compose["services"]
+    web = svc["web"]
+    assert web["image"] == "python:3.12-slim"
+    assert "/ws:/work" in web["volumes"]
+    assert web["entrypoint"] == ["sh", "-lc"]
+    assert web["ports"] == ["127.0.0.1::8000"]
+    assert web["user"] == "root"                      # apt needs root
+    cmd = web["command"][0]
+    assert "apt-get install -y --no-install-recommends libpq5" in cmd
+    assert "pip install -e ." in cmd
+    assert "PORT=8000 python manage.py runserver" in cmd
+    assert web["environment"]["DATABASE_URL"].endswith("db:5432/app")
+    assert svc["db"]["image"] == "postgres:16"        # extra service carried
+    assert "ports" not in svc["db"]                   # nothing published
+    assert "forge" in svc                             # worker injected
+    json.dumps(r.compose)
+
+
+def test_synthesized_defaults_worker_image_and_health():
+    r = synthesized_recipe("/ws", "forge-worker",
+                           {"dev_cmd": "go run .", "web_port": 8080})
+    web = r.compose["services"]["web"]
+    assert web["image"] == "forge-worker"
+    assert "user" not in web                          # no apt → unprivileged
+    assert r.health_path == "/"
+    assert web["command"] == ["PORT=8080 go run ."]
+
+
+def test_resolve_learned_overlay_synthesizes_when_no_marker():
+    r = resolve(Probe(), "/ws", "img",
+                overlay={"dev_cmd": "go run .", "web_port": 8080})
+    assert r.name == "synthesized" and r.web_port == 8080
+    # An overlay that doesn't describe an app can't upgrade none.
+    assert resolve(Probe(), "/ws", "img", overlay={"apt": ["curl"]}).name == "none"
+
+
+def test_resolve_repo_compose_beats_learned_synthesis():
+    p = Probe(repo_compose_text=(
+        "services:\n  web:\n    image: a\n    ports: ['3000:3000']\n"))
+    r = resolve(p, "/ws", "img", overlay={"dev_cmd": "go run .", "web_port": 8080})
+    assert r.name == "repo-compose"
+
+
+def test_resolve_env_yml_beats_markers():
+    # A committed .forge/env.yml that declares the app is the repo author's
+    # explicit recipe: precedence #1, even over package.json.
+    p = Probe(package_json='{"scripts":{"dev":"vite"}}',
+              env_yml="dev_cmd: python app.py\nweb_port: 8000\n")
+    r = resolve(p, "/ws", "img")
+    assert r.name == "synthesized"
+    assert "PORT=8000 python app.py" in r.compose["services"]["web"]["command"][0]
+
+
+def test_resolve_env_yml_patch_applies_to_resolved_recipe():
+    # An env.yml with no dev_cmd is an overlay patch, not a full recipe.
+    p = Probe(package_json='{"scripts":{"dev":"vite"}}',
+              env_yml="env:\n  VITE_FLAG: '1'\n")
+    r = resolve(p, "/ws", "img")
+    assert r.name == "node-web"
+    assert r.compose["services"]["web"]["environment"]["VITE_FLAG"] == "1"
+
+
+def test_resolve_env_yml_invalid_is_ignored():
+    p = Probe(package_json='{"scripts":{"dev":"vite"}}',
+              env_yml="bogus_key: 1\n")
+    assert resolve(p, "/ws", "img").name == "node-web"
+    p2 = Probe(env_yml=":\nnot yaml: [\n")
+    assert resolve(p2, "/ws", "img").name == "none"
+
+
+def test_resolve_env_yml_wins_over_learned_overlay():
+    p = Probe(env_yml="dev_cmd: python app.py\nweb_port: 8000\n")
+    r = resolve(p, "/ws", "img", overlay={"dev_cmd": "ruby app.rb",
+                                          "web_port": 4567,
+                                          "apt": ["libpq5"]})
+    cmd = r.compose["services"]["web"]["command"][0]
+    assert "PORT=8000 python app.py" in cmd           # committed beats learned
+    assert "libpq5" in cmd                            # apt still unions in
+
+
+def test_apply_overlay_rebuilds_synthesized_and_keeps_forge_service():
+    r = synthesized_recipe("/ws", "img", _synth_overlay())
+    # session mutates the forge service in place (e.g. codex auth mount) before
+    # the repair loop runs — a rebuild must not lose that.
+    r.compose["services"]["forge"]["volumes"].append("/home/u/.codex:/home/forge/.codex")
+    out = apply_overlay(r, {"apt": ["libxml2"], "web_port": 8001})
+    web = out.compose["services"]["web"]
+    cmd = web["command"][0]
+    assert "libpq5" in cmd and "libxml2" in cmd       # apt unioned
+    assert "pip install -e ." in cmd                  # setup steps survive
+    assert "PORT=8001" in cmd and out.web_port == 8001
+    assert web["ports"] == ["127.0.0.1::8001"]
+    assert "/home/u/.codex:/home/forge/.codex" in out.compose["services"]["forge"]["volumes"]
+    assert out.compose["services"]["db"]["image"] == "postgres:16"
+
+
+def test_apply_overlay_synthesized_is_idempotent():
+    ov = _synth_overlay()
+    r = synthesized_recipe("/ws", "img", ov)
+    again = apply_overlay(r, ov)
+    assert again.compose["services"]["web"] == r.compose["services"]["web"]
+
+
+def test_runtime_facts_synthesized():
+    r = synthesized_recipe("/ws", "img", _synth_overlay())
+    facts = r.runtime_facts()
+    assert facts["stack"] == "synthesized"
+    assert facts["app"] == "http://web:8000"
+    assert facts["dev_cmd"] == "python manage.py runserver 0.0.0.0:8000"
+    assert facts["pkg_manager"] is None
+    assert facts["test_cmds"] == []
+
+
+def test_synthesized_overlay_secrets_never_reach_synth_state():
+    # qa_credentials/lessons ride along in the repo overlay; the recipe must
+    # not carry them (synth_overlay is rebuilt into composes on repair).
+    ov = _synth_overlay(qa_credentials=[{"username": "a", "password": "b"}],
+                        lessons=[{"text": "x"}])
+    r = synthesized_recipe("/ws", "img", ov)
+    assert "qa_credentials" not in (r.synth_overlay or {})
+    assert "lessons" not in (r.synth_overlay or {})
+    assert "password" not in json.dumps(r.compose)

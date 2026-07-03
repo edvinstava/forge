@@ -1,18 +1,31 @@
 """Resolve a cloned repo into a concrete environment recipe.
 
 Precedence (first match wins):
-  1. .forge/env.yml committed in the repo            → (honored by caller; not yet generated here)
+  1. .forge/env.yml committed in the repo, declaring the app
+     (dev_cmd + web_port)                            → synthesized from it
   2. CHAP markers (multi-repo stack)                 → dhis2-chap template
   3. supabase/config.toml + Next                     → next-supabase template
   4. package.json (JS app)                           → node-web template
   5. repo's own docker-compose.yml / compose.yml     → wrap it
-  6. else                                            → none (worker only, no app)
+  6. learned overlay declaring the app               → synthesized from it
+  7. else                                            → none (worker only, no app)
 
 Note: the repo's own compose is wrapped (5) only when the repo is not a
 recognized JS app (4). A JS repo that also ships an incidental compose (e.g. a
 bare db service) still runs via its dev script — wrapping such a compose would
 start the db but never the app. A pure compose repo (no package.json) is the
 case this rescues from the worker-only `none` fallback.
+
+(6) is what lets Forge spin up repos with NO recognized marker at all — Python,
+Go, Rust, Ruby, JVM, static sites, anything: the self-heal probe agent reads
+the repo (README, manifests, code), emits an overlay describing how to run it
+(image, setup_cmds, dev_cmd, web_port, extra services), and the resolver
+synthesizes a compose from that description. Learned once per repo, repaired by
+the same overlay-delta loop as everything else. An env.yml that validates but
+does NOT declare the app acts as an overlay patch on whatever resolves below
+it; an invalid env.yml is ignored (never fatal). A committed env.yml runs with
+the same trust as package.json scripts or the repo's own compose — containment
+is the container, not the recipe source.
 
 A Recipe with `multi=True` is provisioned via ComposeEnv; `compose` is a plain
 dict serialized as JSON (valid YAML) to runs/<id>/forge-compose.yml.
@@ -26,6 +39,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
+from forge import knowledge
 from forge.supaports import SUPABASE_BASE_API_PORT
 
 # The Supabase local anon key is a fixed, deterministic JWT (signed from the
@@ -70,6 +84,9 @@ class Recipe:
     pkg_manager_used: str = "npm"   # remembered so an overlay can rebuild the cmd
     script_used: str = "dev"
     test_cmds: tuple = ()           # canonical test commands (from package.json)
+    synth_overlay: dict | None = None   # synthesized recipes: the overlay they
+                                        # were built from, so a repair delta can
+                                        # rebuild the compose (cf. script_used)
 
     def runtime_facts(self, app_url: str | None = None) -> dict:
         """Operational facts for the agent's prompt: the reachable endpoints and
@@ -82,13 +99,18 @@ class Recipe:
         app = app_url or (f"http://{self.web_service}:{self.web_port}"
                           if self.web_service else None)
         is_js = self.name in ("node-web", "next-supabase")
+        if is_js:
+            dev_cmd = f"{self.pkg_manager_used} run {self.script_used}"
+        elif self.name == "synthesized":
+            dev_cmd = (self.synth_overlay or {}).get("dev_cmd")
+        else:
+            dev_cmd = None
         return {
             "stack": self.name,
             "app": app,
             "endpoints": self._endpoints(app),
             "pkg_manager": self.pkg_manager_used if is_js else None,
-            "dev_cmd": f"{self.pkg_manager_used} run {self.script_used}" if is_js
-                       else None,
+            "dev_cmd": dev_cmd,
             "test_cmds": list(self.test_cmds) if is_js else [],
         }
 
@@ -494,6 +516,100 @@ def none_recipe(workspace, worker_image) -> Recipe:
     return Recipe("none", True, compose, None, None, "/", confidence="low")
 
 
+# --- synthesized: any stack, from a learned/committed overlay -----------------
+
+# The overlay keys that describe the environment itself. qa_credentials,
+# lessons, provenance etc. ride along in the repo overlay but must never be
+# baked into a Recipe (synth_overlay is rebuilt into composes on repair).
+_SYNTH_KEYS = ("image", "apt", "setup_cmds", "dev_cmd", "web_port",
+               "health_path", "env", "services")
+
+
+def declares_app(overlay: dict | None) -> bool:
+    """An overlay describes a runnable app when it names the command and the
+    port; everything else (image, setup, services) has a workable default."""
+    return bool(overlay and overlay.get("dev_cmd") and overlay.get("web_port"))
+
+
+def synth_command(overlay: dict, port: int) -> str:
+    """The app service's `sh -lc` command: optional apt deps, then the overlay's
+    setup steps (dependency install, build, migrate), then the dev server with
+    PORT exported — the same shape as web_command, minus the JS assumptions."""
+    apt = overlay.get("apt") or []
+    pre = (f"apt-get update && apt-get install -y --no-install-recommends "
+           f"{' '.join(apt)} && " if apt else "")
+    steps = " && ".join(overlay.get("setup_cmds") or [])
+    return f"{pre}{steps + ' && ' if steps else ''}PORT={port} {overlay['dev_cmd']}"
+
+
+def synthesized_recipe(workspace, worker_image, overlay: dict) -> Recipe:
+    """Build a runnable compose from an overlay that describes the app — the
+    universal fallback for repos with no recognized marker. The app runs in
+    `image` (default: the worker image, which covers JS), with the repo mounted
+    at /work; overlay `services` (db, cache — validated to {image, environment,
+    command}) join the project network unpublished, reachable by name."""
+    port = int(overlay["web_port"])
+    web = {
+        "image": overlay.get("image") or worker_image,
+        "working_dir": "/work",
+        "volumes": [f"{workspace}:/work"],
+        "entrypoint": ["sh", "-lc"],
+        "command": [synth_command(overlay, port)],
+        "ports": [f"127.0.0.1::{port}"],
+    }
+    if overlay.get("env"):
+        web["environment"] = dict(overlay["env"])
+    if overlay.get("apt"):
+        web["user"] = "root"                          # apt-get needs root
+    services = {"web": web}
+    for name, svc in (overlay.get("services") or {}).items():
+        services[name] = copy.deepcopy(svc)
+    services["forge"] = _worker_service(workspace, worker_image, {
+        "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN}",
+        "GH_TOKEN": "${GH_TOKEN}"})
+    return Recipe("synthesized", True, {"services": services}, "web", port,
+                  overlay.get("health_path", "/"),
+                  notes="Synthesized from learned/committed overlay.",
+                  synth_overlay={k: copy.deepcopy(overlay[k])
+                                 for k in _SYNTH_KEYS if k in overlay})
+
+
+def parse_env_yml(text: str | None) -> dict | None:
+    """A committed .forge/env.yml as a validated overlay, or None. Absent,
+    unparseable, or schema-invalid files all resolve to None — a broken env.yml
+    must degrade to marker resolution, never take provisioning down."""
+    if not text:
+        return None
+    try:
+        data = yaml.safe_load(text)
+        return knowledge.validate(data) if isinstance(data, dict) else None
+    except (yaml.YAMLError, ValueError):
+        return None
+
+
+def _worker_mount(compose: dict) -> tuple:
+    """(workspace, worker_image) recovered from the injected forge service, so
+    a synthesized recipe can be rebuilt from a repair delta without threading
+    the originals through the repair loop."""
+    svc = compose["services"]["forge"]
+    ws = next(v.rpartition(":")[0] for v in svc["volumes"]
+              if isinstance(v, str) and v.endswith(":/work"))
+    return ws, svc["image"]
+
+
+def _reapply_synth(recipe: Recipe, delta: dict) -> Recipe:
+    """Rebuild a synthesized recipe with the delta merged onto the overlay it
+    was built from — but carry the existing forge service over verbatim, so
+    session-applied mutations (e.g. the codex auth mount) survive repair."""
+    keep = {k: v for k, v in delta.items() if k in _SYNTH_KEYS}
+    merged = knowledge.merge_overlay(recipe.synth_overlay or {}, keep)
+    ws, img = _worker_mount(recipe.compose)
+    rebuilt = synthesized_recipe(ws, img, merged)
+    compose = copy.deepcopy(rebuilt.compose)
+    compose["services"]["forge"] = copy.deepcopy(recipe.compose["services"]["forge"])
+    return dataclasses.replace(rebuilt, compose=compose)
+
+
 def dhis2_seed_url(version: str = "2.42") -> str:
     return (f"https://databases.dhis2.org/sierra-leone/{version}/"
             "dhis2-db-sierra-leone.sql.gz")
@@ -503,8 +619,13 @@ def apply_overlay(recipe: Recipe, overlay: dict | None) -> Recipe:
     """Merge a learned/committed overlay onto a resolved recipe: rebuild the web
     command for pkg_manager/apt, honor a dev_cmd escape hatch, and override
     web_port/health_path/env. Returns a new (frozen) Recipe, mutating only a deep
-    copy of the compose dict."""
-    if not overlay or recipe.compose is None or not recipe.web_service:
+    copy of the compose dict. Synthesized recipes are rebuilt from their source
+    overlay instead — their command is not a pkg_manager expansion."""
+    if not overlay or recipe.compose is None:
+        return recipe
+    if recipe.name == "synthesized":
+        return _reapply_synth(recipe, overlay)
+    if not recipe.web_service:
         return recipe
     compose = copy.deepcopy(recipe.compose)
     web = compose["services"][recipe.web_service]
@@ -598,6 +719,14 @@ def apply_resource_limits(recipe: Recipe, mem_limit: str = "8g",
 def resolve(probe: Probe, workspace: str, worker_image: str,
             chap_target: str = "frontend", seed_dir: str | None = None,
             supabase_offset: int = 0, overlay: dict | None = None) -> Recipe:
+    # A committed .forge/env.yml is the repo author's explicit recipe: when it
+    # declares the app it wins outright (precedence #1); otherwise it merges
+    # over the learned overlay as a patch (committed beats learned, per key).
+    committed = parse_env_yml(probe.env_yml)
+    if committed or overlay:
+        overlay = knowledge.merge_overlay(overlay or {}, committed or {})
+    if committed and declares_app(committed):
+        return synthesized_recipe(workspace, worker_image, overlay)
     if probe.is_chap_core or probe.is_chap_frontend:
         target = "frontend" if probe.is_chap_frontend else "chap-core"
         recipe = dhis2_chap_recipe(workspace, worker_image, target,
@@ -618,7 +747,18 @@ def resolve(probe: Probe, workspace: str, worker_image: str,
         # just a db — still runs via its dev script rather than being hijacked).
         recipe = (repo_compose_recipe(workspace, worker_image,
                                       probe.repo_compose_text)
-                  or none_recipe(workspace, worker_image))
+                  or _no_marker(workspace, worker_image, overlay))
     else:
-        recipe = none_recipe(workspace, worker_image)
+        # No marker matched: if the (learned) overlay describes the app — the
+        # probe agent read the repo and worked out how to run it — synthesize;
+        # else worker-only. This is the "spin up anything" path.
+        recipe = _no_marker(workspace, worker_image, overlay)
+    if recipe.name == "synthesized":
+        return recipe                     # overlay already baked in
     return apply_overlay(recipe, overlay)
+
+
+def _no_marker(workspace, worker_image, overlay) -> Recipe:
+    if declares_app(overlay):
+        return synthesized_recipe(workspace, worker_image, overlay)
+    return none_recipe(workspace, worker_image)

@@ -413,6 +413,10 @@ class SessionManager(ReviewOps, LifecycleOps):
                 self.knowledge.save(slug, {**learned, "repo": slug,
                                            "provenance": {"learned_by": "agent"}})
                 recipe, probe = self._recipe_for(run_id, ws)   # re-resolve with overlay
+                # The probe can change the whole recipe (none → synthesized for
+                # repos with no marker), not just patch it — tell the user.
+                yield TurnEvent("phase", {"name": "recipe",
+                                          "label": f"Recipe: {recipe.name}"})
         # Start the public tunnel (fronts the shared Caddy) so the app has a
         # remote URL; the per-run host header lets Caddy pick the right route.
         # `origin` is the public URL surfaced to the user (see _register below).

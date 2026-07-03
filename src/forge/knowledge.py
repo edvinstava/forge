@@ -3,15 +3,49 @@ resolver merges onto a deterministic recipe and the self-heal agent learns.
 Stored as YAML under <root>/<owner>/<repo>.yml — never inside the repo, so it
 can never reach a PR."""
 import os
+import re
 from pathlib import Path
 
 import yaml
 
 OVERLAY_KEYS = {"schema", "repo", "pkg_manager", "apt", "dev_cmd",
                 "web_port", "health_path", "env", "qa_credentials",
-                "provenance", "lessons"}
+                "provenance", "lessons", "image", "setup_cmds", "services"}
 _PKG_MANAGERS = {"bun", "pnpm", "yarn", "npm"}
 LESSONS_CAP = 50   # max durable lessons kept per repo (most recent win)
+
+# Extra-service containment: only what an app dependency (db, cache, broker)
+# needs. No volumes → no host mounts; no ports → nothing published; reachable
+# from the app solely by service name on the project network.
+_SERVICE_KEYS = {"image", "environment", "command"}
+_SERVICE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_RESERVED_SERVICES = {"web", "forge"}   # Forge injects these itself
+
+
+def _validate_services(services) -> None:
+    if not isinstance(services, dict):
+        raise ValueError("services must be a mapping of name -> service")
+    for name, svc in services.items():
+        if not isinstance(name, str) or not _SERVICE_NAME.match(name):
+            raise ValueError(f"bad service name: {name!r}")
+        if name in _RESERVED_SERVICES:
+            raise ValueError(f"service name {name!r} is reserved")
+        if not isinstance(svc, dict):
+            raise ValueError(f"service {name!r} must be a mapping")
+        extra = set(svc) - _SERVICE_KEYS
+        if extra:
+            raise ValueError(f"service {name!r}: unknown keys {sorted(extra)}")
+        if not isinstance(svc.get("image"), str) or not svc["image"].strip():
+            raise ValueError(f"service {name!r} needs an image")
+        env = svc.get("environment")
+        if env is not None and not (isinstance(env, dict) and all(
+                isinstance(k, str) and isinstance(v, str)
+                for k, v in env.items())):
+            raise ValueError(f"service {name!r}: environment must map str -> str")
+        cmd = svc.get("command")
+        if cmd is not None and not (isinstance(cmd, str) or (
+                isinstance(cmd, list) and all(isinstance(c, str) for c in cmd))):
+            raise ValueError(f"service {name!r}: command must be str or list of str")
 
 
 def validate(overlay: dict) -> dict:
@@ -41,6 +75,34 @@ def validate(overlay: dict) -> dict:
                 and isinstance(c.get("password"), str) for c in creds)):
             raise ValueError(
                 "qa_credentials must be a list of {username, password[, role]} dicts")
+    image = overlay.get("image")
+    if image is not None and not (isinstance(image, str) and image.strip()
+                                  and not re.search(r"\s", image)):
+        raise ValueError("image must be a non-empty string without whitespace")
+    setup = overlay.get("setup_cmds")
+    if setup is not None and not (isinstance(setup, list)
+                                  and all(isinstance(c, str) for c in setup)):
+        raise ValueError("setup_cmds must be a list of strings")
+    if overlay.get("services") is not None:
+        _validate_services(overlay["services"])
+    # web_port/env/dev_cmd feed int()/dict()/f-strings during recipe synthesis:
+    # reject garbage here so a bad agent emission (or env.yml) degrades to
+    # "learned nothing" instead of crashing provisioning.
+    port = overlay.get("web_port")
+    if port is not None:
+        if isinstance(port, bool) or not (
+                isinstance(port, int) or (isinstance(port, str) and port.isdigit())):
+            raise ValueError("web_port must be an integer")
+        if not 0 < int(port) < 65536:
+            raise ValueError("web_port must be in 1..65535")
+    env = overlay.get("env")
+    if env is not None and not (isinstance(env, dict) and all(
+            isinstance(k, str) and isinstance(v, (str, int, float))
+            and not isinstance(v, bool) for k, v in env.items())):
+        raise ValueError("env must map str -> scalar")
+    dev = overlay.get("dev_cmd")
+    if dev is not None and not (isinstance(dev, str) and dev.strip()):
+        raise ValueError("dev_cmd must be a non-empty string")
     return overlay
 
 
