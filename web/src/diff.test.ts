@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseDiff } from "./Inspector";
+import { parseDiff } from "./diffModel";
 
 const SAMPLE = `diff --git a/src/app.tsx b/src/app.tsx
 index 1111111..2222222 100644
