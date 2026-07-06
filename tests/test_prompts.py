@@ -252,7 +252,18 @@ def test_capture_and_qa_prompts_note_preinstalled_browser():
     for p in (t, q):
         low = p.lower()
         assert "preinstalled" in low and "playwright" in low
-        assert "do not download" in low
+    assert "do not download" in t.lower()
+
+
+def test_qa_prompt_directs_agent_to_shared_cdp_browser():
+    # The live agent-browser view only streams what happens in the SHARED
+    # Chromium browserview starts — the QA prompt must send the agent there,
+    # with a fallback so QA still runs when the screencaster failed.
+    from forge.prompts import build_qa_prompt
+    q = build_qa_prompt(["header renders"], "http://web:3000")
+    assert "connectOverCDP" in q
+    assert "127.0.0.1:9222" in q
+    assert "fall back" in q.lower()
 
 
 def test_attachments_block_lists_paths():

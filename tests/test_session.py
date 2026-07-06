@@ -49,6 +49,12 @@ class FakeEnv:
                           "session_id": "sess-1", "result": "fixed",
                           "total_cost_usd": 0.1, "num_turns": 1, "usage": {}})
 
+    def exec_detached(self, argv, workdir="/work", service=None):
+        # background helpers (dev server, QA screencaster) — record for asserts
+        if not hasattr(self, "detached"):
+            self.detached = []
+        self.detached.append((argv, service))
+
     def port(self, service, port):
         return 5599
 
@@ -1802,6 +1808,24 @@ def test_qa_returns_failures_and_emits_event(tmp_path):
     assert qa_events and qa_events[-1].data["failed"] == ["logout works"]
     assert qa_events[-1].data["checked"] == 1
     assert qa_events[-1].data["summary"] == "0/1"
+
+
+def test_qa_streams_agent_browser_and_stops_it_after(tmp_path):
+    """The live agent-browser view: _qa starts the screencaster (detached exec
+    in the worker) before the QA worker turn and always writes the stop file
+    after — even though the worker stream itself is env-scripted here."""
+    from forge import browserview
+    mgr, store, flow = _qa_mgr(tmp_path)
+    env = mgr._env_for("r1")
+    plan = Plan(goal="x", acceptance=("logout works",))
+
+    _drain_capture(mgr._qa("r1", env, plan, "auto"), [])
+
+    (argv, service), = env.detached
+    assert service == "forge" and "screencast" in " ".join(argv)
+    d = browserview.live_dir(mgr.cfg.runs_dir, "r1")
+    assert (d / browserview.SCRIPT_NAME).is_file()
+    assert (d / "stop").exists()          # turn over → screencaster told to exit
 
 
 def test_qa_inconclusive_when_no_qa_json(tmp_path):

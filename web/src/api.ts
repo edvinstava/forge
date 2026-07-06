@@ -1,4 +1,4 @@
-import type { Repo, SessionSummary, SessionDetail, SseEvent, PrResult, VerifyResult, ProxyConfig, CheckpointAction, BatchResult } from "./types";
+import type { Repo, SessionSummary, SessionDetail, SseEvent, PrResult, VerifyResult, ProxyConfig, CheckpointAction, BatchResult, BrowserStatus } from "./types";
 import { taskPath, checkpointPath, taskBody, checkpointBody } from "./coworker";
 
 export function parseSseChunk(buffer: string): { events: SseEvent[]; rest: string } {
@@ -32,6 +32,7 @@ export const listRepos = (q = "") => j<Repo[]>(`/api/repos?q=${encodeURIComponen
 export const listSessions = () => j<SessionSummary[]>("/api/sessions");
 export const getSession = (id: string) => j<SessionDetail>(`/api/sessions/${id}`);
 export const getDiff = async (id: string) => (await j<{diff: string}>(`/api/sessions/${id}/diff`)).diff;
+export const getBrowserStatus = (id: string) => j<BrowserStatus>(`/api/sessions/${id}/browser`);
 export const getVerify = (id: string) => j<VerifyResult>(`/api/sessions/${id}/verify`);
 export const openPr = (id: string): Promise<PrResult> =>
   fetch(`/api/sessions/${id}/pr`, {method: "POST"}).then(r => r.json());

@@ -1380,11 +1380,19 @@ class SessionManager(ReviewOps, LifecycleOps):
         creds = self._qa_credentials(run_id)
         secrets = [c.get("password") for c in (creds or []) if c.get("password")]
         yield TurnEvent("phase", {"name": "qa", "label": "Browser QA"})
-        yield from self._stream_worker(
-            run_id, env, build_qa_prompt(list(plan.acceptance),
-                                         self._app_url(run_id), credentials=creds,
-                                         lessons=self._lessons(run_id)),
-            chosen, redact=lambda s: redact_secrets(s, secrets))
+        # Live agent-browser view: a shared CDP Chromium + screencaster stream
+        # this turn's browsing to the workspace UI. Best-effort on both ends —
+        # QA runs identically (minus the stream) if either piece fails.
+        from forge import browserview
+        browserview.start(self.cfg.runs_dir, run_id, env)
+        try:
+            yield from self._stream_worker(
+                run_id, env, build_qa_prompt(list(plan.acceptance),
+                                             self._app_url(run_id), credentials=creds,
+                                             lessons=self._lessons(run_id)),
+                chosen, redact=lambda s: redact_secrets(s, secrets))
+        finally:
+            browserview.stop(self.cfg.runs_dir, run_id)
         qa = self._read_qa(run_id)
         failed = qa.failures if qa else []
         yield TurnEvent("qa", {"checked": qa.checked if qa else 0,

@@ -259,6 +259,27 @@ _QA_SCHEMA = (
 )
 
 
+# QA turns come with a shared, already-running Chromium (browserview.py starts
+# it with a CDP endpoint) so the teammate can WATCH the agent test in the
+# workspace live view. The agent must drive that browser — a self-launched one
+# would work but stream nothing. The fallback keeps QA alive when the shared
+# browser failed to start.
+_QA_SHARED_BROWSER = (
+    "A shared Chromium is already running in this container with its CDP "
+    "endpoint at http://127.0.0.1:9222, and your teammate is WATCHING it live — "
+    "drive this browser rather than launching your own. In Node (run scripts "
+    "with `NODE_PATH=$(npm root -g)` so the preinstalled playwright resolves): "
+    "`const browser = await require('playwright').chromium"
+    ".connectOverCDP('http://127.0.0.1:9222')`, then reuse the open page: "
+    "`const ctx = browser.contexts()[0]; "
+    "const page = ctx.pages()[0] ?? await ctx.newPage()`. When you finish, "
+    "disconnect (`browser.close()` on a CDP connection only detaches) — never "
+    "kill the shared browser process. Only if connecting fails, fall back to "
+    "launching Chromium yourself (playwright and its browsers are preinstalled "
+    "at $PLAYWRIGHT_BROWSERS_PATH)."
+)
+
+
 def build_qa_prompt(acceptance, app_url, credentials=None, lessons=()):
     crits = "\n".join(f"- {c}" for c in acceptance)
     cred_block = ""
@@ -291,8 +312,8 @@ def build_qa_prompt(acceptance, app_url, credentials=None, lessons=()):
     return (
         "You are QA-testing a change in a real browser — do NOT modify code in "
         f"this turn. A live instance is running at {app_url}. Open it in your "
-        "browser (Playwright) and verify each acceptance criterion below by "
-        f"actually exercising the UI. {_BROWSER} Capture evidence as you go: a PNG "
+        "browser and verify each acceptance criterion below by "
+        f"actually exercising the UI. {_QA_SHARED_BROWSER} Capture evidence as you go: a PNG "
         "screenshot under `.forge/artifacts/` showing the key criteria "
         "satisfied (and one for any criterion you mark failed), recorded in "
         "`.forge/artifacts/manifest.json` as "

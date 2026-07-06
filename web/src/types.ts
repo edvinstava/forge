@@ -115,6 +115,16 @@ export interface SseEvent {
   data: any;
 }
 
+/** Response from GET /api/sessions/:id/browser — the live agent-browser
+ * stream's heartbeat. `active` = a frame fresher than a few seconds exists;
+ * `ts` is the frame's mtime (ms) and doubles as the <img> cache-buster. */
+export interface BrowserStatus {
+  active: boolean;
+  ts: number;
+  url: string;
+  title: string;
+}
+
 /** Model choices offered in the UI; `auto` picks based on the task. The real
  * list is provider-specific and comes from GET /api/config (model_choices) —
  * this constant is only the pre-fetch fallback. */
