@@ -80,6 +80,10 @@ class FakeManager:
     def turn(self, run_id, prompt, model="auto", origin="api", attachments=None):
         self.calls.append(("turn", run_id, prompt, attachments))
         yield from self._turn
+
+    def build_turn(self, run_id, prompt, model="auto", origin="api", attachments=None):
+        self.calls.append(("build_turn", run_id, prompt, attachments))
+        yield from self._turn
     def plan_task(self, run_id, task, model="auto", policy=None, autonomous=False,
                   auto_draft=None, origin="api", attachments=None):
         self.plan_calls.append(("plan_task", run_id, task, attachments))
@@ -290,7 +294,10 @@ def test_capacity_blocks_start(tmp_path):
            any("max_live_sessions" in p.text for p in client.posts)
 
 
-def test_follow_up_in_live_thread_runs_turn(tmp_path):
+def test_build_follow_up_in_live_thread_runs_build_turn(tmp_path):
+    # A build follow-up ("fix …") must finish like the first task: build_turn
+    # commits + pushes + opens/updates the PR. (Regression: it used to route to
+    # turn(), which pushed nothing.)
     from forge.store import Store
     store = Store(tmp_path / "f.db")
     store.create_run("run-1", "acme/landing-page", "", "forge/x")
@@ -299,8 +306,44 @@ def test_follow_up_in_live_thread_runs_turn(tmp_path):
     manager = FakeManager()
     bot = _bot(store, manager=manager)
     bot.handle_message("D1", "U1", "also fix the footer", thread_ts="1001")
-    assert ("turn", "run-1", "also fix the footer", []) in manager.calls
+    assert ("build_turn", "run-1", "also fix the footer", []) in manager.calls
+    assert ("turn", "run-1", "also fix the footer", []) not in manager.calls
     assert ("start", "run-1", "acme/landing-page", "github") not in manager.calls
+
+
+def test_question_follow_up_in_live_thread_stays_read_only(tmp_path):
+    # A question is answered with a read-only turn() — never a push.
+    from forge.store import Store
+    store = Store(tmp_path / "f.db")
+    store.create_run("run-1", "acme/landing-page", "", "forge/x")
+    store.set_state("run-1", "running")
+    store.link_slack_thread("1001", "D1", "run-1", "1001")
+    manager = FakeManager()
+    bot = _bot(store, manager=manager)
+    bot.handle_message("D1", "U1", "does the footer link work?", thread_ts="1001")
+    assert ("turn", "run-1", "does the footer link work?", []) in manager.calls
+    assert not any(c[0] == "build_turn" for c in manager.calls)
+
+
+def test_build_follow_up_reports_pr_updated(tmp_path):
+    # A follow-up build that pushed to an existing PR reports "PR updated", not
+    # "PR opened" (the push refreshed the same PR — no second one was created).
+    from forge.store import Store
+    client = FakeClient()
+    store = Store(tmp_path / "f.db")
+    store.create_run("run-1", "acme/landing-page", "", "forge/x")
+    store.set_state("run-1", "running")
+    store.link_slack_thread("1001", "D1", "run-1", "1001")
+    manager = FakeManager(diff="diff --git a/x b/x\n+++ b/x\n+y\n", turn_events=[
+        TE("phase", name="agent", label="Agent working"),
+        TE("done", diff_files=1, verify_ok=True, updated=True,
+           pr_url="https://github.com/o/r/pull/9", message="Changed the footer."),
+    ])
+    bot = _bot(store, manager=manager, client=client)
+    bot.handle_message("D1", "U1", "also change the footer text", thread_ts="1001")
+    posted = [p for p in client.posts if "pull/9" in p.text]
+    assert posted and "PR updated" in posted[0].text
+    assert not any("PR opened" in p.text for p in client.posts)
 
 
 def test_follow_up_wakes_asleep_session_then_turns(tmp_path):
@@ -812,7 +855,8 @@ def test_create_sleep_timer_is_build_not_sleep(tmp_path):
     manager = FakeManager()
     bot = _bot(store, manager=manager)
     bot.handle_message("D1", "U1", "create a sleep timer page", thread_ts="1001")
-    assert ("turn", "run-1", "create a sleep timer page", []) in manager.calls
+    # "create …" is a build follow-up (build_turn pushes), not a sleep command.
+    assert ("build_turn", "run-1", "create a sleep timer page", []) in manager.calls
     assert ("sleep", "run-1") not in manager.calls
 
 
@@ -1075,7 +1119,7 @@ def test_channel_thread_reply_continues_without_mention(tmp_path):
     manager = FakeManager()
     bot = _bot(store, manager=manager)
     bot.route_channel_message("C1", "U1", "also fix the footer", "5000")
-    assert ("turn", "run-1", "also fix the footer", []) in manager.calls
+    assert ("build_turn", "run-1", "also fix the footer", []) in manager.calls
 
 
 def test_channel_ambiguous_pick_resolves_in_thread(tmp_path):
@@ -1204,7 +1248,9 @@ def test_followup_while_running_is_queued_then_runs(tmp_path):
             yield from self._turn
     bot = _bot(store, manager=M(), client=client)
     bot.handle_message("D1", "U1", "first", thread_ts="1001")
-    prompts = [c[2] for c in bot.manager.calls if c[0] == "turn"]
+    # "first" is chat → turn(); the forced-build "second" → build_turn(). What
+    # matters here is the queue order, so track both entry points.
+    prompts = [c[2] for c in bot.manager.calls if c[0] in ("turn", "build_turn")]
     assert prompts == ["first", "second"]   # second ran after first, in order
 
 
@@ -1697,7 +1743,7 @@ def test_followup_with_image_reaches_turn_attachments(tmp_path):
     bot, mgr = _running_thread_bot(tmp_path)
     bot._download = lambda url: ("image/png", b"\x89PNG")
     bot.handle_message("D1", "U1", "fix this", thread_ts="111", files=[_img()])
-    turn = next(c for c in mgr.calls if c[0] == "turn")
+    turn = next(c for c in mgr.calls if c[0] == "build_turn")
     assert turn[3] == ["1-bug.png"]
 
 
@@ -1717,7 +1763,7 @@ def test_non_image_files_skipped_with_note(tmp_path):
     bot, mgr = _running_thread_bot(tmp_path, client=client)
     bot.handle_message("D1", "U1", "fix this", thread_ts="111",
                        files=[_img("notes.txt", mimetype="text/plain")])
-    turn = next(c for c in mgr.calls if c[0] == "turn")
+    turn = next(c for c in mgr.calls if c[0] == "build_turn")
     assert turn[3] == []
     assert any("non-image" in p.text for p in client.posts)
 
@@ -1744,7 +1790,7 @@ def test_download_failure_proceeds_text_only(tmp_path):
         raise OSError("net down")
     bot._download = boom
     bot.handle_message("D1", "U1", "fix", thread_ts="111", files=[_img()])
-    turn = next(c for c in mgr.calls if c[0] == "turn")   # turn still ran
+    turn = next(c for c in mgr.calls if c[0] == "build_turn")   # build turn still ran
     assert turn[3] == []
 
 
@@ -1753,7 +1799,7 @@ def test_max_five_images(tmp_path):
     bot._download = lambda url: ("image/png", b"\x89PNG")
     bot.handle_message("D1", "U1", "fix", thread_ts="111",
                        files=[_img(f"s{i}.png") for i in range(7)])
-    turn = next(c for c in mgr.calls if c[0] == "turn")
+    turn = next(c for c in mgr.calls if c[0] == "build_turn")
     assert len(turn[3]) == 5
 
 
