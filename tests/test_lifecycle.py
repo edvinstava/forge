@@ -72,3 +72,73 @@ def test_reap_superseded_projects(tmp_path):
     assert set(downed) == {"forge-a", "forge-b"}
     assert s.get_env("a")["state"] == "reaped"
     assert s.get_env("keep")["state"] == "live"
+
+
+# --- project-network cleanup (subnet leak: down can't rm a net the proxy holds) ---
+
+def test_compose_down_project_detaches_proxy_and_removes_network(monkeypatch):
+    from forge import lifecycle
+    calls = []
+    monkeypatch.setattr(
+        lifecycle.subprocess, "run",
+        lambda argv, *a, **k: calls.append(" ".join(argv)))
+    lifecycle.compose_down_project("forge-r1")
+    assert any("compose -p forge-r1 down -v --remove-orphans" in c for c in calls)
+    assert any("network disconnect -f forge-r1_default forge-proxy" in c
+               for c in calls)
+    assert any("network rm forge-r1_default" in c for c in calls)
+
+
+def test_network_run_id():
+    from forge.lifecycle import network_run_id
+    assert network_run_id("forge-ab12_default") == "ab12"
+    assert network_run_id("bridge") is None
+    assert network_run_id("supabase_network_x_default") is None
+    assert network_run_id("forge-_default") is None
+
+
+def test_dead_networks_spares_active_and_populated_projects():
+    from forge.lifecycle import dead_networks
+    nets = ["forge-live1_default", "forge-sleepy_default",
+            "forge-stopped_default", "forge-gone_default", "bridge"]
+    dead = dead_networks(nets,
+                         active_run_ids={"live1", "sleepy"},
+                         container_run_ids={"live1", "stopped"})
+    assert dead == ["forge-gone_default"]
+
+
+def test_sweep_dead_networks_removes_only_orphans(tmp_path):
+    from forge.lifecycle import sweep_dead_networks
+    s = Store(tmp_path / "f.db")
+    s.create_env("live1", "forge-live1", "u", 1, "live")
+    s.create_env("sleepy", "forge-sleepy", "u", 1, "asleep")
+    s.create_env("gone", "forge-gone", "u", 1, "live")
+    s.mark_reaped("gone")
+
+    calls = []
+
+    def fake_run(argv):
+        calls.append(" ".join(argv))
+        if "network ls" in calls[-1]:
+            return ("forge-live1_default\nforge-sleepy_default\n"
+                    "forge-gone_default\nforge-orphan_default\nbridge\n")
+        if "ps -a" in calls[-1]:
+            # stopped containers still count: warm snapshots keep their net
+            return "forge-live1\nforge-sleepy\n\n"
+        return ""
+
+    removed = sweep_dead_networks(s, run=fake_run)
+    # 'gone' is reaped in the registry, 'orphan' was never registered — both dead
+    assert set(removed) == {"forge-gone_default", "forge-orphan_default"}
+    for net in removed:
+        assert any(f"network disconnect -f {net} forge-proxy" in c for c in calls)
+        assert any(f"network rm {net}" in c for c in calls)
+    # live and warm-slept networks are never touched
+    assert not any("rm forge-live1_default" in c for c in calls)
+    assert not any("rm forge-sleepy_default" in c for c in calls)
+
+
+def test_sweep_dead_networks_no_docker_is_quiet(tmp_path):
+    from forge.lifecycle import sweep_dead_networks
+    s = Store(tmp_path / "f.db")
+    assert sweep_dead_networks(s, run=lambda argv: None) == []

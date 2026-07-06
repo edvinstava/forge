@@ -611,6 +611,13 @@ def attach_background(app, config, store, manager):
                         logger.info("web self-heal: recovered %s", rid)
                 except Exception:
                     logger.exception("web self-heal pass failed")
+                try:
+                    removed = lifecycle.sweep_dead_networks(store)
+                    if removed:
+                        logger.info("network sweep: reclaimed %d subnet(s): %s",
+                                    len(removed), ", ".join(removed))
+                except Exception:
+                    logger.exception("network sweep failed")
                 time.sleep(30)
 
         def schedule_loop():
