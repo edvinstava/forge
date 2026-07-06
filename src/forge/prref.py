@@ -36,3 +36,14 @@ def find_pr_ref(text: str):
     """Return the first PRRef embedded anywhere in `text`, or None."""
     m = _FIND.search(text or "")
     return parse_pr_ref(m.group(0)) if m else None
+
+
+# Full-URL form: recover the existing PR's URL from `gh pr create`'s
+# "a pull request for branch ... already exists: <url>" error message.
+_URL_FIND = re.compile(rf"https?://github\.com/{_SEG}/{_SEG}(?:\.git)?/pull/\d+")
+
+
+def find_pr_url(text: str):
+    """Return the first full GitHub PR URL embedded in `text`, or None."""
+    m = _URL_FIND.search(text or "")
+    return m.group(0) if m else None

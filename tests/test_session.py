@@ -2702,3 +2702,108 @@ def test_probe_learns_full_synthesis_and_spins_up_app(tmp_path, monkeypatch):
     assert compose["services"]["db"]["image"] == "postgres:16"
     facts = json.loads(store.get_env("r1")["runtime_facts"])
     assert facts["stack"] == "synthesized" and facts["dev_cmd"] == "python -m app"
+
+
+# --- build_turn: a follow-up *build* in an existing thread finishes with a push
+#     + PR, the same way the first task did. Regression: continuation builds used
+#     to route through turn(), which pushed nothing — the work piled up
+#     uncommitted in the container and the agent's own credential-less push failed.
+
+class _RecordingBuildEnv(FakeEnv):
+    """FakeEnv that records every exec argv so a test can pin the git/gh contract
+    of a build turn (commit → push → pr create / update)."""
+    def __init__(self, run_id, files):
+        super().__init__(run_id, files)
+        self.execs = []
+
+    def exec(self, argv, service=None, workdir="/work", env=None):
+        self.execs.append(list(argv))
+        return super().exec(argv, service=service, workdir=workdir, env=env)
+
+
+def _recording_factory():
+    created = []
+
+    def factory(rid, files):
+        e = _RecordingBuildEnv(rid, files)
+        created.append(e)
+        return e
+    return factory, created
+
+
+def _ran_any(created, needle):
+    # A build turn touches several envs (the agent turn, then a fresh one for the
+    # retrospective); scan them all for the git/gh call under test.
+    return any(needle in " ".join(a) for env in created for a in env.execs)
+
+
+def test_build_turn_pushes_and_opens_pr(tmp_path):
+    mgr, store = _mgr(tmp_path)
+    factory, created = _recording_factory()
+    mgr.env_factory = factory
+    list(mgr.start("r1", "o/r", "github"))
+    events = list(mgr.build_turn("r1", "also add a delete button"))
+    assert events[-1].kind == "done"
+    assert events[-1].data.get("pr_url", "").endswith("/pull/1")
+    assert _ran_any(created, "push")               # forge pushed the branch
+    assert _ran_any(created, "pr create")          # and opened the PR
+    assert store.get_run("r1")["pr_url"].endswith("/pull/1")
+    assert any(m["role"] == "user" and "delete button" in m["content"]
+               for m in store.list_messages("r1"))
+
+
+class _PRExistsEnv(_RecordingBuildEnv):
+    """`gh pr create` fails because an OPEN PR already exists for the branch —
+    exactly what GitHub returns on a follow-up build against a live PR."""
+    def exec(self, argv, service=None, workdir="/work", env=None):
+        if "pr" in argv and "create" in argv:
+            from forge.container import ExecResult
+            self.execs.append(list(argv))
+            return ExecResult(1, "", 'a pull request for branch "forge/x" into '
+                              'branch "master" already exists:\n'
+                              'https://github.com/o/r/pull/1\n')
+        return super().exec(argv, service=service, workdir=workdir, env=env)
+
+
+def test_build_turn_updates_existing_open_pr(tmp_path):
+    # An OPEN PR already exists → gh pr create is rejected; the push updated it,
+    # so we report "updated" with the recovered URL rather than failing.
+    mgr, store = _mgr(tmp_path)
+    created = []
+    mgr.env_factory = lambda rid, files: created.append(
+        _PRExistsEnv(rid, files)) or created[-1]
+    list(mgr.start("r1", "o/r", "github"))
+    store.set_state("r1", "pr_open", pr_url="https://github.com/o/r/pull/1")
+    events = list(mgr.build_turn("r1", "tweak the label"))
+    assert events[-1].kind == "done"
+    assert events[-1].data.get("pr_url") == "https://github.com/o/r/pull/1"
+    assert events[-1].data.get("updated") is True
+    assert _ran_any(created, "push")               # pushed the update
+    assert _ran_any(created, "pr create")          # attempted create (gh rejected → update)
+
+
+def test_build_turn_opens_fresh_pr_after_previous_merged(tmp_path):
+    # Regression (review finding): after the first PR is merged/closed the branch's
+    # recorded pr_url is stale. `gh pr create` is NOT blocked by a merged PR, so a
+    # follow-up build must open a FRESH PR — not silently "update" the dead link and
+    # strand the new work. The default env's `gh pr create` SUCCEEDS (returns
+    # /pull/1), standing in for GitHub opening a brand-new PR.
+    mgr, store = _mgr(tmp_path)
+    factory, created = _recording_factory()
+    mgr.env_factory = factory
+    list(mgr.start("r1", "o/r", "github"))
+    store.set_state("r1", "pr_open", pr_url="https://github.com/o/r/pull/OLD")  # merged
+    events = list(mgr.build_turn("r1", "add more"))
+    assert events[-1].kind == "done"
+    assert events[-1].data.get("pr_url", "").endswith("/pull/1")   # the fresh PR
+    assert events[-1].data.get("pr_url") != "https://github.com/o/r/pull/OLD"
+    assert not events[-1].data.get("updated")
+    assert store.get_run("r1")["pr_url"].endswith("/pull/1")
+
+
+def test_build_turn_rejects_concurrent_turn(tmp_path):
+    mgr, store = _mgr(tmp_path)
+    list(mgr.start("r1", "o/r", "github"))
+    mgr._active.add("r1")                           # a turn is already in flight
+    events = list(mgr.build_turn("r1", "do more"))
+    assert events[0].kind == "error" and events[0].data["kind"] == "busy"

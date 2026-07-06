@@ -676,6 +676,7 @@ class ForgeSlackBot:
             state["summary"] = d.get("message")
             state["pr_url"] = d.get("pr_url")      # set iff execute auto-opened a PR
             state["draft"] = d.get("draft")
+            state["pr_updated"] = d.get("updated")  # a follow-up build that pushed to an existing PR
             self._render(channel, anchor_ts, state)
             self._render_live(channel, state)      # retire the ⏳ action line
             self._finish(run_id, channel, anchor_ts, state)
@@ -799,7 +800,9 @@ class ForgeSlackBot:
         # A question turn (or a build that changed nothing) is an answer, not a
         # build report — after a build, a follow-up question still shows the prior
         # files in `git diff`, so mode is the reliable signal, n==0 a backstop.
-        if state.get("mode") == "qa" or n == 0:
+        # A build turn that pushed (pr_url set) is always a report, even if this
+        # turn's diff was empty (e.g. it only pushed a prior turn's stranded commit).
+        if state.get("mode") == "qa" or (n == 0 and not state.get("pr_url")):
             self._post_digest(channel, thread_ts, summary)
             return
         base = state.get("public_url")
@@ -817,8 +820,11 @@ class ForgeSlackBot:
         # button when nothing was opened yet (a follow-up turn awaiting the push).
         pr_url = state.get("pr_url")
         if pr_url:
-            draft = " (draft)" if state.get("draft") else ""
-            parts.append(f"📬 PR opened{draft}: {pr_url}")
+            if state.get("pr_updated"):
+                parts.append(f"📬 PR updated: {pr_url}")
+            else:
+                draft = " (draft)" if state.get("draft") else ""
+                parts.append(f"📬 PR opened{draft}: {pr_url}")
             self._safe_post(channel=channel, thread_ts=thread_ts,
                             text="\n".join(parts))
         else:
@@ -1003,8 +1009,14 @@ class ForgeSlackBot:
             return
         names, notes = self._fetch_attachments(run_id, files)
         self._post_attachment_notes(channel, thread_ts, notes)
-        self._drive(run_id, channel, anchor_ts, state,
-                    self.manager.turn(run_id, text, attachments=names, origin="slack"))
+        # A build follow-up must finish like the first task — commit, push, and
+        # open-or-update the PR. build_turn does that; turn() is the read-only
+        # chat/QA reply that never pushes (its changes would otherwise pile up
+        # uncommitted in the container, unreachable to the credential-less agent).
+        driver = (self.manager.build_turn(run_id, text, attachments=names, origin="slack")
+                  if mode == "build"
+                  else self.manager.turn(run_id, text, attachments=names, origin="slack"))
+        self._drive(run_id, channel, anchor_ts, state, driver)
 
     def handle_open_pr(self, channel, run_id, user=None):
         # The "Open PR" button is visible to everyone who can see the message,

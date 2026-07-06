@@ -10,6 +10,7 @@ from forge import commands as cmd
 from forge import inbox
 from forge import lifecycle
 from forge import prbody
+from forge import prref
 from forge import providers
 from forge.config import parse_mem_mb
 from forge.composeenv import ComposeEnv
@@ -840,6 +841,9 @@ class SessionManager(ReviewOps, LifecycleOps):
         commit_msg = f"{title}\n\n{trailer}" if trailer else title
         # One token for the push + PR-create pair; only these execs see it.
         gh = self._gh_env(run_id)
+        pr_url = None
+        draft = None
+        updated = False
         try:
             for cc in cmd.commit_cmds(commit_msg, name, email):
                 env.exec(cc, service="forge")
@@ -861,6 +865,19 @@ class SessionManager(ReviewOps, LifecycleOps):
                      service="forge")
             pr = env.exec(cmd.pr_create_cmd(title, "/work/report.md", draft),
                           service="forge", env=gh)
+            if pr.exit_code == 0:
+                lines = pr.stdout.strip().splitlines()
+                pr_url = lines[-1] if lines else None
+            else:
+                # `gh pr create` refuses ONLY when an OPEN PR already exists for this
+                # branch — a follow-up build. The push above already updated it, so
+                # reuse its URL (recovered from the error, or the recorded one). A
+                # MERGED/CLOSED PR does not block create, so post-merge follow-up work
+                # opens a fresh PR here instead of being stranded under a dead link.
+                combined = f"{pr.stdout}\n{pr.stderr}"
+                if "already exists" in combined.lower():
+                    pr_url = prref.find_pr_url(combined) or run.get("pr_url")
+                    updated = bool(pr_url)
         finally:
             if unpatched:   # keep the live dev server proxied whatever happened
                 try:
@@ -869,16 +886,16 @@ class SessionManager(ReviewOps, LifecycleOps):
                                                proxy_port=self.cfg.proxy_port)
                 except Exception:
                     pass
-        lines = pr.stdout.strip().splitlines()
-        pr_url = lines[-1] if (pr.exit_code == 0 and lines) else None
         if not pr_url:
             return {"ok": False, "reason": "pr_failed"}
         self.store.set_state(run_id, self.store.get_run(run_id)["state"], pr_url=pr_url)
-        msg = f"PR opened{' (draft)' if draft else ''}: {pr_url}"
+        verb = "updated" if updated else f"opened{' (draft)' if draft else ''}"
+        msg = f"PR {verb}: {pr_url}"
         if verify_failed:
             msg += f" — checks still failing: {', '.join(verify_failed)}"
         self.store.add_message(run_id, "system", msg)
-        return {"ok": True, "pr_url": pr_url, "draft": draft, "verify_failed": verify_failed}
+        return {"ok": True, "pr_url": pr_url, "draft": draft,
+                "verify_failed": verify_failed, "updated": updated}
 
     @published
     def turn(self, run_id, prompt, model="auto", attachments=None):
@@ -952,6 +969,60 @@ class SessionManager(ReviewOps, LifecycleOps):
                                      "verify_ok": verify_ok})
         except Exception:
             log.exception("turn failed run=%s", run_id)
+            self.store.set_state(run_id, "failed")
+            yield TurnEvent("error", {"kind": "internal",
+                                      "detail": "turn failed unexpectedly"})
+        finally:
+            self._end_active(run_id)
+
+    @published
+    def build_turn(self, run_id, prompt, model="auto", attachments=None):
+        """A follow-up *build* in an existing session: run the agent on the new
+        instruction, verify + repair, then commit + push and open-or-update the
+        PR — the same finish the first task got.
+
+        Continuation builds used to route through turn() (a chat turn), which
+        never committed or pushed: the work piled up uncommitted in the container,
+        and when the agent tried to push it itself the sandbox has no git
+        credentials (`fatal: could not read Username`). This is the pushing
+        continuation; turn() stays read-only for chat/QA replies.
+
+        No re-plan (the session already carries context and the agent resumes its
+        own session) and no acceptance-QA (there is no fresh plan to accept
+        against). auto_draft is inherited from the run so a Slack build keeps
+        drafting-on-red instead of stalling."""
+        if not self._try_begin(run_id):
+            yield TurnEvent("error", {"kind": "busy", "detail": "a turn is in flight"})
+            return
+        try:
+            self.store.add_message(run_id, "user", prompt)
+            self.store.set_lifecycle_state(run_id, flow.EXECUTING)
+            self.store.set_state(run_id, "running")
+            self._reset_artifacts(run_id)
+            self._reset_pr_meta(run_id)
+            auto_draft = bool(self.store.get_run(run_id).get("auto_draft"))
+            env = self._env_for(run_id)
+            chosen = self.provider.resolve_model(model, prompt)
+            yield TurnEvent("model", {"choice": model, "resolved": chosen})
+            yield TurnEvent("phase", {"name": "agent", "label": "Agent working"})
+            # Live agent-browser view, same as _execute: stream the executor's
+            # browsing to the workspace when a live app exists (best-effort).
+            from forge import browserview
+            if self._app_url(run_id):
+                browserview.start(self.cfg.runs_dir, run_id, env)
+            try:
+                result = yield from self._stream_worker(
+                    run_id, env, build_task_prompt(prompt, self._app_url(run_id),
+                                                   env=self._runtime_facts(run_id),
+                                                   attachments=self._attachment_paths(run_id, attachments),
+                                                   lessons=self._lessons(run_id)), chosen)
+            finally:
+                browserview.stop(self.cfg.runs_dir, run_id)
+            yield from self._verify_and_finalize(run_id, env, result, chosen, model,
+                                                 auto_draft, run_qa=False)
+        except Exception:
+            log.exception("build_turn failed run=%s", run_id)
+            self.store.set_lifecycle_state(run_id, flow.FAILED)
             self.store.set_state(run_id, "failed")
             yield TurnEvent("error", {"kind": "internal",
                                       "detail": "turn failed unexpectedly"})
@@ -1169,6 +1240,17 @@ class SessionManager(ReviewOps, LifecycleOps):
                                                lessons=self._lessons(run_id)), chosen)
         finally:
             browserview.stop(self.cfg.runs_dir, run_id)
+        yield from self._verify_and_finalize(run_id, env, result, chosen, model,
+                                             auto_draft, extra_guidance=extra_guidance)
+
+    def _verify_and_finalize(self, run_id, env, result, chosen, model, auto_draft,
+                             extra_guidance="", run_qa=True):
+        """Post-agent tail shared by a planned build (_execute) and a follow-up
+        build (build_turn): verify + repair, then finalize with a push+PR (green),
+        draft-a-PR (auto_draft bottom-out), or an escalation checkpoint
+        (supervised bottom-out). `run_qa=False` skips the acceptance-QA tier — a
+        follow-up build has no fresh plan, so there is nothing new to accept
+        against; its repo checks (lint/build/test) still run via _repair."""
         if result is None:
             self.store.set_lifecycle_state(run_id, flow.FAILED)
             yield TurnEvent("error", {"kind": "worker", "detail": "no result event"})
@@ -1209,7 +1291,7 @@ class SessionManager(ReviewOps, LifecycleOps):
         # Acceptance QA tier: drive the live app through the plan's acceptance
         # criteria. Gated → escalate on bottom-out (never push); advisory → report.
         qa_plan = self._read_plan(run_id)
-        if qa_plan and qa_plan.acceptance and self._app_url(run_id):
+        if run_qa and qa_plan and qa_plan.acceptance and self._app_url(run_id):
             if self.cfg.qa_gating:
                 qa_failed = yield from self._qa_gate(run_id, env, qa_plan, model)
                 qa_res = self._read_qa(run_id)
@@ -1302,6 +1384,7 @@ class SessionManager(ReviewOps, LifecycleOps):
         yield TurnEvent("done", {"message": result.result_text,
                                  "diff_files": base_meta.get("diff_files"),
                                  "verify_ok": verify_ok, "draft": pr.get("draft"),
+                                 "updated": pr.get("updated"),
                                  "pr_url": pr["pr_url"]})
 
     # --- Task-10 methods ---
