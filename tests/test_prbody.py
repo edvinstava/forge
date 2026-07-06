@@ -86,3 +86,28 @@ def test_compose_body_falls_back_to_task_and_leads_with_warning():
                                branch="b", warning="Opened as a draft — x fails.")
     assert body.startswith("> ⚠️ **Opened as a draft")
     assert "## Task\n\nfix the price column" in body
+
+
+# --- clip_summary (no-body fallback) ------------------------------------------
+
+def test_clip_summary_shortens_long_task_at_word_boundary():
+    out = prbody.clip_summary("word " * 100)
+    assert len(out) <= prbody.BODY_FALLBACK_LIMIT
+    assert out.endswith("…")
+    assert "  " not in out                     # whitespace collapsed
+
+
+def test_clip_summary_keeps_short_task_verbatim():
+    assert prbody.clip_summary("fix the price column") == "fix the price column"
+
+
+def test_clip_summary_uses_only_first_paragraph():
+    out = prbody.clip_summary("Fix the thing.\n\nLong second paragraph here.")
+    assert out == "Fix the thing."
+
+
+def test_compose_body_clips_a_long_fallback_task():
+    body = prbody.compose_body(task="word " * 100, run_id="r1", branch="b")
+    assert "## Task" in body
+    assert "…" in body                         # the long task was clipped
+    assert "Opened by forge" in body           # footer still present

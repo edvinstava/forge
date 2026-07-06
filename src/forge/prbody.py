@@ -11,6 +11,9 @@ import json
 import re
 
 TITLE_LIMIT = 72
+# Cap for the no-body fallback (the agent wrote no description, so we quote the
+# task). Keeps even that path concise instead of dumping the whole task text.
+BODY_FALLBACK_LIMIT = 280
 
 # Jira/Linear-style issue keys: ABC-374, ABC-1.
 _ISSUE_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
@@ -25,6 +28,14 @@ def _clip(text: str, limit: int) -> str:
         return text
     cut = text[: limit - 1].rsplit(" ", 1)[0].rstrip(" ,.;:-")
     return (cut or text[: limit - 1]) + "…"
+
+
+def clip_summary(text: str, limit: int = BODY_FALLBACK_LIMIT) -> str:
+    """Condense a task into a short summary for the no-body PR fallback:
+    first paragraph only, whitespace-collapsed, clipped at a word boundary."""
+    first = (text or "").strip().split("\n\n", 1)[0]
+    first = re.sub(r"\s+", " ", first).strip()
+    return _clip(first, limit)
 
 
 def issue_refs(text: str) -> list:
@@ -83,12 +94,12 @@ def ensure_issue_ref(title: str, refs) -> str:
 def compose_body(*, task: str, run_id: str, branch: str, meta_body: str = None,
                  refs=(), warning: str = None) -> str:
     """The PR body: draft warning first (reviewers must see it), then the
-    agent's own description (or the task verbatim when it wrote none), issue
-    refs, and a small provenance footer."""
+    agent's own description (or a short clip of the task when it wrote none),
+    issue refs, and a small provenance footer."""
     parts = []
     if warning:
         parts.append(f"> ⚠️ **{warning}**")
-    parts.append(meta_body or (f"## Task\n\n{task.strip()}" if (task or "").strip()
+    parts.append(meta_body or (f"## Task\n\n{clip_summary(task)}" if (task or "").strip()
                                else "_No description provided._"))
     if refs:
         parts.append("**Refs:** " + ", ".join(refs))
