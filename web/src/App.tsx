@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Sidebar } from "./Sidebar";
 import { Chat } from "./Chat";
 import { Inspector } from "./Inspector";
+import { Workspace } from "./Workspace";
 import type { NewSessionPayload } from "./Sidebar";
 import type { SessionSummary, SseEvent, ProxyConfig } from "./types";
 import { getConfig, listSessions, streamPost, endSession } from "./api";
-import { parseSessionHash, sessionHash } from "./deepLink";
+import { parseSessionHash, sessionHash, parseRoute } from "./deepLink";
 import { pickWebUrl, localPreviewUrl } from "./webUrl";
 
 const POLL_INTERVAL_MS = 4000;
@@ -27,6 +28,9 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(
     () => parseSessionHash(window.location.hash)
   );
+  // #live=<id> renders the focused Workspace full-screen; anything else is the
+  // dashboard. Kept in state so a hashchange (Slack link, back button) reroutes.
+  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activate = useCallback((runId: string) => {
@@ -36,8 +40,9 @@ export function App() {
 
   useEffect(() => {
     const onHash = () => {
-      const id = parseSessionHash(window.location.hash);
-      if (id) setActiveId(id);
+      const r = parseRoute(window.location.hash);
+      setRoute(r);
+      if (r.view === "dashboard" && r.runId) setActiveId(r.runId);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -161,6 +166,10 @@ export function App() {
   }, [refreshSessions]);
 
   /* ── Render ── */
+  if (route.view === "workspace") {
+    return <Workspace runId={route.runId} />;
+  }
+
   return (
     <div className="app-shell">
       {/* Sidebar */}

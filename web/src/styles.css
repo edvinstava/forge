@@ -1915,3 +1915,46 @@ body {
   color: var(--state-failed-fg);
   background: var(--state-failed-bg);
 }
+
+/* ── Live workspace: running app (75%) + control (25%) ── */
+.workspace-shell {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  grid-template-rows: 100vh;
+  height: 100vh;
+  overflow: hidden;
+}
+.workspace-app {
+  grid-column: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base);
+}
+.workspace-app .preview-wrap { flex: 1; min-height: 0; }
+.workspace-control {
+  grid-column: 2;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+}
+.workspace-control-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-exit {
+  margin-left: auto;
+  text-decoration: none;
+  opacity: 0.7;
+}
+.workspace-open { margin-left: auto; text-decoration: none; }
+@media (max-width: 720px) {
+  .workspace-shell { grid-template-columns: 1fr; grid-template-rows: 60vh 40vh; }
+  .workspace-control { grid-column: 1; border-left: none; border-top: 1px solid var(--border-subtle); }
+}
