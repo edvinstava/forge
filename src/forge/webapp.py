@@ -603,6 +603,13 @@ def attach_background(app, config, store, manager):
                     except Exception:
                         logger.exception("dormant delete failed for %s", rid)
                 refresh_proxy(store, config)
+                try:
+                    removed = lifecycle.sweep_dead_networks(store)
+                    if removed:
+                        logger.info("network sweep: reclaimed %d subnet(s): %s",
+                                    len(removed), ", ".join(removed))
+                except Exception:
+                    logger.exception("network sweep failed")
                 time.sleep(30)
 
         def schedule_loop():
