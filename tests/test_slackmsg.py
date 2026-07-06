@@ -151,6 +151,17 @@ def test_deep_link_prefers_static_and_shortest():
     assert deep_link(BASE, diff) == BASE + "/devotta"
 
 
+def test_web_workspace_link_builds_live_hash():
+    from forge.slackmsg import web_workspace_link
+    assert web_workspace_link("https://forge.example.com", "run-1") \
+        == "https://forge.example.com/#live=run-1"
+
+
+def test_web_workspace_link_empty_base_is_blank():
+    from forge.slackmsg import web_workspace_link
+    assert web_workspace_link("", "run-1") == ""
+
+
 from forge.slackmsg import concise_verify_reason
 
 

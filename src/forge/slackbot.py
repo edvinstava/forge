@@ -13,6 +13,7 @@ from forge.slackmsg import (greeting_head, qa_head, clean_summary, deep_link,
                             unwrap_links, concise_verify_reason, digest_for_slack,
                             format_transcript, narration_line, remember_text,
                             truncate_for_slack, web_session_link,
+                            web_workspace_link,
                             SLACK_BLOCK_TEXT_LIMIT, SLACK_DIGEST_LIMIT)
 from forge.slackroute import Route
 from forge.slackbatch import parse_batch_lines
@@ -591,6 +592,7 @@ class ForgeSlackBot:
             url = self.tunnel.start(run_id, _localhost_target(d["web_url"]))
             state["public_url"] = url or d["web_url"]
             state["local_url"] = d.get("local_url")
+            state["workspace_url"] = self._workspace_link(run_id)
             if state.get("announce_live") and not state.get("_announced"):
                 state["_announced"] = True
                 r = self._safe_post(
@@ -734,19 +736,27 @@ class ForgeSlackBot:
         has no FORGE_WEB_URL — e.g. unit tests with a bare cfg namespace)."""
         return web_session_link(getattr(self.cfg, "forge_web_url", ""), run_id)
 
+    def _workspace_link(self, run_id) -> str:
+        """Deep link to the live workspace (app + chat side by side) in the
+        forge web app ('' when the daemon has no FORGE_WEB_URL)."""
+        return web_workspace_link(getattr(self.cfg, "forge_web_url", ""), run_id)
+
     @staticmethod
     def _url_lines(state):
         """The public tunnel link (share it) plus, when present, the local
         *.forge.localhost link that opens on the forge host with no external DNS
         — a working fallback when the public hostname can't be resolved there.
-        The 🧭 forge link opens this session in the web app (same run, richer
-        surface: diff viewer, verify panel, live stream)."""
+        When a live app has a workspace link, 🗔 (running app + agent chat side
+        by side) is the richer surface and supersedes the 🧭 dashboard-session
+        line; 🧭 remains for messages with no live app (e.g. answers)."""
         lines = []
         if state.get("public_url"):
             lines.append(f"🌐 {state['public_url']}")
         if state.get("local_url"):
             lines.append(f"🏠 {state['local_url']} (local, no DNS)")
-        if state.get("forge_url"):
+        if state.get("workspace_url"):
+            lines.append(f"🗔 {state['workspace_url']} (app + chat in forge web)")
+        elif state.get("forge_url"):
             lines.append(f"🧭 {state['forge_url']} (session in forge web)")
         return lines
 

@@ -241,6 +241,31 @@ def test_url_event_surfaces_local_preview_link(tmp_path):
     assert any("run-1.forge.localhost:8088" in u.text for u in client.updates)
 
 
+def test_url_event_surfaces_workspace_link_and_hides_dashboard(tmp_path):
+    # With a configured forge_web_url and a live app, the live message shows the
+    # 🗔 workspace link (the richer surface) and drops the 🧭 dashboard line.
+    from forge.store import Store
+    store = Store(tmp_path / "f.db")
+    manager = FakeManager(start_events=[
+        TE("url", web_url="https://demo.trycloudflare.com",
+           local_url="http://run-1.forge.localhost:8088"),
+    ])
+    client = FakeClient()
+    bot = _bot(store, manager=manager, client=client)
+    bot.cfg.forge_web_url = "https://forge.example.com"
+    bot.handle_message("D1", "U1", "fix the landing page repo")
+    # Messages are edited in place (same ts): the pre-live "spinning up" edit
+    # legitimately shows 🧭 before any app exists, then the SAME message is
+    # rewritten to 🗔 once the url event fires. Assert on each message's FINAL
+    # text (last edit per ts) — that's what the user actually sees.
+    final_by_ts = {}
+    for u in client.updates:
+        final_by_ts[u.ts] = u.text
+    finals = "\n---\n".join(final_by_ts.values())
+    assert "🗔 https://forge.example.com/#live=run-1" in finals
+    assert "🧭" not in finals  # once live, the workspace link supersedes 🧭
+
+
 def test_none_confidence_asks_for_repo(tmp_path):
     from forge.store import Store
     client = FakeClient()

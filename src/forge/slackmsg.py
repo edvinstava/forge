@@ -343,3 +343,12 @@ def web_session_link(base_url: str, run_id: str) -> str:
     if not base_url:
         return ""
     return f"{base_url.rstrip('/')}/#s={run_id}"
+
+
+def web_workspace_link(base_url: str, run_id: str) -> str:
+    """Deep link to the live workspace (running app + agent chat, side by side)
+    in the forge web app ('' when no base is configured). The SPA resolves
+    #live=<run_id> to the workspace view on load."""
+    if not base_url:
+        return ""
+    return f"{base_url.rstrip('/')}/#live={run_id}"
