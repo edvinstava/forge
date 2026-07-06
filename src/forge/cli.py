@@ -241,13 +241,17 @@ def _cmd_web(args) -> int:
         # rebuild the app on each .py change; the factory reads runs_dir from env.
         import os
         os.environ["FORGE_RUNS_DIR"] = str(cfg.runs_dir)
+        # timeout_graceful_shutdown: open SSE streams otherwise stall the
+        # reload worker's shutdown forever (see webapp.make_server).
         uvicorn.run("forge.webapp:make_app", factory=True, host=args.host,
                     port=args.port, log_level="info", reload=True,
-                    reload_dirs=[str(Path(__file__).resolve().parent.parent)])
+                    reload_dirs=[str(Path(__file__).resolve().parent.parent)],
+                    timeout_graceful_shutdown=5)
         return 0
     from forge.session import SessionManager
     from forge.webapp import (create_app, attach_background,
-                              attach_tunnel_lifecycle, refresh_proxy)
+                              attach_tunnel_lifecycle, make_server,
+                              refresh_proxy)
     store = Store(cfg.runs_dir / "forge.db")
     tm = None
     proxy_refresh = None
@@ -304,7 +308,7 @@ def _cmd_web(args) -> int:
                   f"secret in {secret_hint}", file=sys.stderr)
         attach_public_gate(app, urlparse(public).hostname or "")
         attach_github_webhook(app, cfg, manager, gh, secret)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    make_server(app, manager.bus, args.host, args.port).run()
     return 0
 
 

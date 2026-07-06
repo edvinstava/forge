@@ -293,6 +293,29 @@ def make_app() -> FastAPI:
     return app
 
 
+def make_server(app, bus, host, port, timeout_graceful_shutdown=5):
+    """uvicorn Server whose shutdown isn't held hostage by SSE streams.
+
+    The web UI always has event-stream connections open (EventSource
+    reconnects, heartbeats keep them alive), and uvicorn's graceful shutdown
+    waits for open connections *indefinitely* by default — so a bare
+    uvicorn.run() never gets past "Waiting for connections to close" on
+    Ctrl+C. Two-part fix: the exit signal closes every bus subscription
+    (tailing feeds end within milliseconds), and anything still streaming —
+    an in-flight turn iterating the engine — is force-closed after
+    `timeout_graceful_shutdown` seconds."""
+    import uvicorn
+
+    class Server(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            bus.close_all()
+            super().handle_exit(sig, frame)
+
+    return Server(uvicorn.Config(
+        app, host=host, port=port, log_level="info",
+        timeout_graceful_shutdown=timeout_graceful_shutdown))
+
+
 # Loopback Host names the local browser uses when talking to `forge web`
 # directly. Only these get the full (unauthenticated) API.
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
