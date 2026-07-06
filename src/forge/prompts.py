@@ -14,14 +14,24 @@ _ROLE = (
 )
 
 
-# The worker image bakes Playwright + Chromium in (see worker-image/Dockerfile,
-# PLAYWRIGHT_BROWSERS_PATH). Saying so saves every browser-using turn the
-# install-or-hunt dance the agent otherwise starts with.
-_BROWSER = (
-    "Playwright and its Chromium browser are preinstalled in this container "
-    "(`playwright` on PATH, browsers at `$PLAYWRIGHT_BROWSERS_PATH`) — launch "
-    "it directly; do not download browsers, run `playwright install`, or "
-    "search the filesystem for one."
+# Browser-visible turns (executor and QA alike) come with a shared,
+# already-running Chromium (browserview.py starts it with a CDP endpoint) so
+# the teammate can WATCH the agent work in the workspace live view. The agent
+# must drive that browser — a self-launched one would work but stream nothing.
+# The fallback keeps the turn alive when the shared browser failed to start.
+_SHARED_BROWSER = (
+    "A shared Chromium is already running in this container with its CDP "
+    "endpoint at http://127.0.0.1:9222, and your teammate is WATCHING it live — "
+    "drive this browser rather than launching your own. In Node (run scripts "
+    "with `NODE_PATH=$(npm root -g)` so the preinstalled playwright resolves): "
+    "`const browser = await require('playwright').chromium"
+    ".connectOverCDP('http://127.0.0.1:9222')`, then reuse the open page: "
+    "`const ctx = browser.contexts()[0]; "
+    "const page = ctx.pages()[0] ?? await ctx.newPage()`. When you finish, "
+    "disconnect (`browser.close()` on a CDP connection only detaches) — never "
+    "kill the shared browser process. Only if connecting fails, fall back to "
+    "launching Chromium yourself (playwright and its browsers are preinstalled "
+    "at $PLAYWRIGHT_BROWSERS_PATH)."
 )
 
 
@@ -32,7 +42,9 @@ _BROWSER = (
 _CAPTURE = (
     "\n\nVISUAL ARTIFACTS (best-effort, do this LAST, after the change and your "
     "own verification):\n"
-    f"- {_BROWSER}\n"
+    "- Capture with the same shared browser described above (everything is "
+    "preinstalled — do not download browsers, run `playwright install`, or "
+    "search the filesystem for one).\n"
     "- If the result is visually observable in the running app, capture it with "
     "your browser and save files under `.forge/artifacts/` (create it). If the "
     "change is backend-only / not visible, skip this section entirely.\n"
@@ -145,7 +157,8 @@ def build_task_prompt(task: str, app_url: str | None = None,
         live = (
             f"\n\nA live instance of this app is running at {app_url}. "
             "Before changing code, reproduce the reported problem against it; "
-            "after your fix, confirm the symptom is gone.\n"
+            "after your fix, confirm the symptom is gone. Do ALL browser work "
+            f"in the shared browser: {_SHARED_BROWSER}\n"
             + _CAPTURE
         )
     return (f"{_ROLE}\n\nTASK:\n{task}\n{live}{render_env_block(env)}"
@@ -259,27 +272,6 @@ _QA_SCHEMA = (
 )
 
 
-# QA turns come with a shared, already-running Chromium (browserview.py starts
-# it with a CDP endpoint) so the teammate can WATCH the agent test in the
-# workspace live view. The agent must drive that browser — a self-launched one
-# would work but stream nothing. The fallback keeps QA alive when the shared
-# browser failed to start.
-_QA_SHARED_BROWSER = (
-    "A shared Chromium is already running in this container with its CDP "
-    "endpoint at http://127.0.0.1:9222, and your teammate is WATCHING it live — "
-    "drive this browser rather than launching your own. In Node (run scripts "
-    "with `NODE_PATH=$(npm root -g)` so the preinstalled playwright resolves): "
-    "`const browser = await require('playwright').chromium"
-    ".connectOverCDP('http://127.0.0.1:9222')`, then reuse the open page: "
-    "`const ctx = browser.contexts()[0]; "
-    "const page = ctx.pages()[0] ?? await ctx.newPage()`. When you finish, "
-    "disconnect (`browser.close()` on a CDP connection only detaches) — never "
-    "kill the shared browser process. Only if connecting fails, fall back to "
-    "launching Chromium yourself (playwright and its browsers are preinstalled "
-    "at $PLAYWRIGHT_BROWSERS_PATH)."
-)
-
-
 def build_qa_prompt(acceptance, app_url, credentials=None, lessons=()):
     crits = "\n".join(f"- {c}" for c in acceptance)
     cred_block = ""
@@ -313,7 +305,7 @@ def build_qa_prompt(acceptance, app_url, credentials=None, lessons=()):
         "You are QA-testing a change in a real browser — do NOT modify code in "
         f"this turn. A live instance is running at {app_url}. Open it in your "
         "browser and verify each acceptance criterion below by "
-        f"actually exercising the UI. {_QA_SHARED_BROWSER} Capture evidence as you go: a PNG "
+        f"actually exercising the UI. {_SHARED_BROWSER} Capture evidence as you go: a PNG "
         "screenshot under `.forge/artifacts/` showing the key criteria "
         "satisfied (and one for any criterion you mark failed), recorded in "
         "`.forge/artifacts/manifest.json` as "
@@ -330,8 +322,9 @@ def build_qa_fix_prompt(failed, app_url):
     return (
         "Browser QA found these acceptance criteria still failing in the running "
         f"app at {app_url}. Fix the app so each passes (do not weaken the "
-        "criteria). Keep the repo's CI checks green.\n\nFAILING CRITERIA:\n" + crits
-        + "\n")
+        "criteria). Keep the repo's CI checks green. If you exercise the app in "
+        f"a browser while fixing, use the shared one: {_SHARED_BROWSER}"
+        "\n\nFAILING CRITERIA:\n" + crits + "\n")
 
 
 _LESSONS_SCHEMA = (
