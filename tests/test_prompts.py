@@ -67,6 +67,18 @@ def test_task_prompt_tells_agent_to_run_repo_checks():
     assert "fix" in p
 
 
+def test_task_prompt_pr_description_is_concise():
+    # PR-body guidance: short Summary + one-line Testing note; no mandatory
+    # per-file Changes section and no ## Testing section.
+    p = build_task_prompt("fix the offer price column")
+    assert ".forge/pr.json" in p
+    assert "## Summary" in p
+    assert "1-2 sentences" in p
+    assert "**Testing:**" in p
+    assert "## Changes" not in p
+    assert "## Testing" not in p
+
+
 def test_role_drops_dont_ask_questions():
     from forge.prompts import _ROLE
     assert "do not ask questions" not in _ROLE.lower()

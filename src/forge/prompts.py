@@ -98,10 +98,13 @@ _PR_META = (
     "`.forge/pr.json` (create `.forge/`) as strict JSON:\n"
     '{"title": "<imperative and specific, ≤72 chars; include the issue key from '
     'the task (e.g. ABC-123) if there is one>",\n'
-    ' "body": "<markdown: ## Summary (what & why, 2-4 sentences) · ## Changes '
-    "(short bullets per file/area) · ## Testing (checks you ran, what you "
-    'verified)>"}\n'
-    "Write it for the reviewer — concise and concrete. Never mention forge, "
+    ' "body": "<short markdown: a ## Summary of 1-2 sentences saying what changed '
+    "and why; then, ONLY if they add signal, up to 3 short bullets (a notable "
+    "change, a caveat, or a follow-up) — not a per-file list; then a single line "
+    '`**Testing:** <what you verified>` (omit the line if nothing meaningful was '
+    'run)>"}\n'
+    "Keep it short: the diff already shows the changes and CI shows the checks, so "
+    "don't restate them at length. Write it for the reviewer; never mention forge, "
     "sessions, or run ids; do not include the diff itself."
 )
 
