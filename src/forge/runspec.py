@@ -25,18 +25,27 @@ _FILLER = frozenset("""
     need needs needed want wants wanted like help let lets
 """.split())
 
+# Words that point at the repo instead of the task ("for the opplandstaal
+# project", "in this repo"). The branch already lives in that repo, so they
+# only crowd the real task out of the length cap.
+_REPO_TALK = frozenset("""
+    project projects repo repos repository repositories codebase
+""".split())
+
 _ISSUE_KEY_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6})\b")
 _URL_RE = re.compile(r"https?://\S+|\bwww\.\S+")
 _NAME_MAX = 32
 
 
-def _slug(task: str) -> str:
+def _slug(task: str, repo: str = "") -> str:
     """A fitting branch name from a free-form prompt: issue keys first (even
-    when only inside a pasted URL), URLs and filler words dropped, truncated
-    at a word boundary."""
+    when only inside a pasted URL), URLs, filler, repo-talk, and the repo's
+    own name dropped, truncated at a word boundary."""
     keys = [k.lower() for k in _ISSUE_KEY_RE.findall(task)]
+    drop = _FILLER | _REPO_TALK | {
+        w for w in re.split(r"[^a-z0-9]+", repo.lower()) if w}
     s = _ISSUE_KEY_RE.sub(" ", _URL_RE.sub(" ", task)).lower()
-    words = [w for w in re.split(r"[^a-z0-9]+", s) if w and w not in _FILLER]
+    words = [w for w in re.split(r"[^a-z0-9]+", s) if w and w not in drop]
     name = ""
     for w in dict.fromkeys(keys + words):    # dedupe, keep order
         cand = f"{name}-{w}" if name else w[:_NAME_MAX]
@@ -71,5 +80,5 @@ def normalize_github_repo(value: str) -> str:
 def make_runspec(repo: str, task: str, run_id: str) -> RunSpec:
     if not _REPO_RE.match(repo):
         raise ValueError(f"repo must be 'owner/name', got: {repo!r}")
-    branch = f"forge/{run_id[:8]}/{_slug(task)}"
+    branch = f"forge/{run_id[:8]}/{_slug(task, repo)}"
     return RunSpec(repo=repo, task=task, run_id=run_id, branch=branch)

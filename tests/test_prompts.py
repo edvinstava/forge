@@ -148,6 +148,25 @@ def test_qa_prompt_renders_credentials_block_with_roles():
     assert "role=admin" in p and "a@b.c" in p and "pw" in p
 
 
+def test_qa_prompt_treats_expected_role_denial_as_correct_behavior():
+    # A customer account bouncing off /admin is access control working —
+    # QA must not report it as a defect/"blocker" (it did, once).
+    from forge.prompts import build_qa_prompt
+    p = build_qa_prompt(["c1"], "http://app")
+    assert "ROLE EXPECTATIONS" in p
+    assert "correct access control" in p
+    assert "'blocker'" in p
+
+
+def test_qa_prompt_includes_repo_lessons():
+    from forge.prompts import build_qa_prompt
+    p = build_qa_prompt(["c1"], "http://app",
+                        lessons=["admin login is edvin@example.com"])
+    assert "LESSONS FROM PRIOR RUNS" in p
+    assert "admin login is edvin@example.com" in p
+    assert "LESSONS" not in build_qa_prompt(["c1"], "http://app")
+
+
 # --- ENVIRONMENT block: operational runtime facts for the agent --------------
 
 _FACTS = {

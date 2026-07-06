@@ -797,7 +797,7 @@ def test_commit_identity_forge_mode_uses_bot(tmp_path, monkeypatch):
     mgr.cfg.commit_identity = "forge"
 
     class FakeApp:
-        def bot_identity(self):
+        def bot_identity(self, repo_slug=""):
             return ("forge[bot]", "42+forge[bot]@users.noreply.github.com")
 
     monkeypatch.setattr(mgr, "_ghapp", lambda: FakeApp())
@@ -814,7 +814,7 @@ def test_commit_identity_forge_mode_errors_without_app(tmp_path):
 
 
 class FakeGhApp:
-    def bot_identity(self):
+    def bot_identity(self, repo_slug=""):
         return ("forge[bot]", "42+forge[bot]@users.noreply.github.com")
 
 
@@ -829,6 +829,24 @@ def test_commit_identity_auto_keeps_user_as_author_with_app(tmp_path, monkeypatc
     assert mgr._commit_identity("r1") == ("Dev", "dev@example.com")
     assert mgr._commit_trailer("r1") == (
         "Co-Authored-By: forge[bot] <42+forge[bot]@users.noreply.github.com>")
+
+
+def test_commit_trailer_scopes_identity_lookup_to_run_repo(tmp_path, monkeypatch):
+    # The /users lookup authenticates with the run's repo installation token
+    # (ghapp.bot_identity) — the trailer must hand it that repo.
+    mgr, store = _mgr(tmp_path)
+    mgr.cfg.commit_identity = "auto"
+    seen = {}
+
+    class RecApp:
+        def bot_identity(self, repo_slug=""):
+            seen["repo"] = repo_slug
+            return ("forge[bot]", "42+forge[bot]@users.noreply.github.com")
+
+    monkeypatch.setattr(mgr, "_ghapp", lambda: RecApp())
+    monkeypatch.setattr(mgr, "_repo_slug", lambda rid: "o/r")
+    assert mgr._commit_trailer("r1").startswith("Co-Authored-By:")
+    assert seen["repo"] == "o/r"
 
 
 def test_commit_trailer_empty_without_app_or_in_pinned_modes(tmp_path, monkeypatch):
@@ -846,7 +864,7 @@ def test_commit_trailer_never_blocks_commit_on_identity_failure(tmp_path, monkey
     mgr.cfg.commit_identity = "auto"
 
     class BrokenApp:
-        def bot_identity(self):
+        def bot_identity(self, repo_slug=""):
             raise RuntimeError("api unreachable")
 
     monkeypatch.setattr(mgr, "_ghapp", lambda: BrokenApp())

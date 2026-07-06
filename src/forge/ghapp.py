@@ -74,15 +74,26 @@ class GhApp:
         self._tok_cache[(owner, repo)] = (tok["token"], now + 3000)
         return tok["token"]
 
-    def bot_identity(self):
+    def bot_identity(self, repo_slug: str = ""):
         if self._identity is None:
             slug = self.cfg.gh_app_slug or "forge"
             login = f"{slug}[bot]"
             # /users/* rejects App JWTs with 401; the bot user is public data,
-            # so this lookup goes out unauthenticated.
+            # but the unauthenticated rate limit (60/h per IP) makes bare
+            # lookups flaky — and a failure here silently costs the bot its
+            # Co-Authored-By credit. When the caller knows which repo it is
+            # working on, authenticate with that repo's installation token;
+            # a minting failure falls back to the unauthenticated call.
+            token = ""
+            if repo_slug and "/" in repo_slug:
+                owner, repo = repo_slug.split("/", 1)
+                try:
+                    token = self.installation_token(owner, repo)
+                except Exception:
+                    token = ""
             user = self.http(
                 "GET", f"{_API}/users/{urllib.parse.quote(login, safe='')}",
-                "", None)
+                token, None)
             self._identity = (login,
                               f"{user['id']}+{login}@users.noreply.github.com")
         return self._identity

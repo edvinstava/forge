@@ -140,7 +140,36 @@ def test_bot_identity_derives_login_and_noreply_email(tmp_path):
     assert login == "forge[bot]"
     assert email == "42+forge[bot]@users.noreply.github.com"
     # /users/* is not an App-JWT endpoint — GitHub answers 401 to a JWT there.
-    # The lookup is public data and must go out unauthenticated.
+    # With no repo to mint a token for, the lookup goes out unauthenticated.
+    users_call = next(c for c in http.calls if "/users/" in c[1])
+    assert users_call[2] == ""
+
+
+def test_bot_identity_authenticates_lookup_with_repo_token(tmp_path):
+    # The unauthenticated /users rate limit (60/h per IP) silently cost the
+    # bot its Co-Authored-By credit — with a repo in hand the lookup rides
+    # that repo's installation token instead.
+    http = FakeHttp()
+    app = ghapp.GhApp(_cfg(tmp_path), signer=lambda *a: "JWT", http=http,
+                      clock=lambda: 1000.0)
+    login, email = app.bot_identity("o/r")
+    assert email == "42+forge[bot]@users.noreply.github.com"
+    users_call = next(c for c in http.calls if "/users/" in c[1])
+    assert users_call[2] == "ghs_inst"
+
+
+def test_bot_identity_falls_back_to_unauthenticated_on_mint_failure(tmp_path):
+    class FlakyMint(FakeHttp):
+        def __call__(self, method, url, token, data=None):
+            if url.endswith("/installation") or url.endswith("/access_tokens"):
+                raise RuntimeError("github down")
+            return FakeHttp.__call__(self, method, url, token, data)
+
+    http = FlakyMint()
+    app = ghapp.GhApp(_cfg(tmp_path), signer=lambda *a: "JWT", http=http,
+                      clock=lambda: 1000.0)
+    login, email = app.bot_identity("o/r")
+    assert email == "42+forge[bot]@users.noreply.github.com"
     users_call = next(c for c in http.calls if "/users/" in c[1])
     assert users_call[2] == ""
 

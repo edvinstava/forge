@@ -259,7 +259,7 @@ _QA_SCHEMA = (
 )
 
 
-def build_qa_prompt(acceptance, app_url, credentials=None):
+def build_qa_prompt(acceptance, app_url, credentials=None, lessons=()):
     crits = "\n".join(f"- {c}" for c in acceptance)
     cred_block = ""
     if credentials:
@@ -280,6 +280,14 @@ def build_qa_prompt(acceptance, app_url, credentials=None):
         "`.forge/qa.json` naming exactly which account/role you need. Apply the "
         "same rule to any other human-only blocker (paywall, 2FA, external "
         "secret): set `blocked` and stop rather than working around it.")
+    role_rules = (
+        "\n\nROLE EXPECTATIONS: restricted areas (e.g. /admin) are SUPPOSED to "
+        "reject accounts whose role lacks access. Being denied while signed in "
+        "with such an account is correct access control, not a defect — never "
+        "call it a 'blocker' or failure in your summary, evidence, or "
+        "screenshot captions; describe it as expected behavior. QA is blocked "
+        "only when a criterion requires a role you have no working credentials "
+        "for — then set `blocked` to needs_credentials naming that exact role.")
     return (
         "You are QA-testing a change in a real browser — do NOT modify code in "
         f"this turn. A live instance is running at {app_url}. Open it in your "
@@ -292,7 +300,7 @@ def build_qa_prompt(acceptance, app_url, credentials=None):
         '"caption": "<what it shows>"}]} — append if the file exists, ≤6 files '
         "total. These screenshots are shown to the teammate who asked for the "
         "change, so frame the relevant part of the UI."
-        + cred_block + guardrail
+        + cred_block + guardrail + role_rules + lessons_block(lessons)
         + "\n\nACCEPTANCE CRITERIA:\n" + crits + "\n\n" + _QA_SCHEMA)
 
 

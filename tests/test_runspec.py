@@ -46,8 +46,30 @@ def test_url_noise_not_slugified():
     assert rs.branch == "forge/abcd1234/fix-login"
 
 
+def test_repo_name_and_repo_talk_dropped():
+    # "For the opplandstaal project" says which repo — the branch already
+    # lives there, so neither the repo's name nor "project" earns a slot.
+    rs = make_runspec(
+        "acme/opplandstaal",
+        "Can you do this? For the opplandstaal project. OSTAL-375: Admin UI - "
+        "Add emission field to product form",
+        "f6750f29d5294b07")
+    assert rs.branch == "forge/f6750f29/ostal-375-admin-ui-add-emission"
+
+
+def test_multiword_repo_name_words_dropped():
+    rs = make_runspec("acme/internship-portal",
+                      "update the internship portal signup flow", "abcd1234ef")
+    assert rs.branch == "forge/abcd1234/update-signup-flow"
+
+
 def test_all_filler_falls_back_to_task():
     rs = make_runspec("a/b", "hi can you please", "abcd1234ef")
+    assert rs.branch == "forge/abcd1234/task"
+
+
+def test_repo_only_task_falls_back_to_task():
+    rs = make_runspec("acme/webapp", "the webapp repo please", "abcd1234ef")
     assert rs.branch == "forge/abcd1234/task"
 
 

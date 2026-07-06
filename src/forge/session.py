@@ -214,7 +214,7 @@ class SessionManager(ReviewOps, LifecycleOps):
             raise RuntimeError(
                 "commit_identity='forge' but GitHub App not configured "
                 "(set FORGE_GH_APP_ID and FORGE_GH_APP_KEY)")
-        return app.bot_identity()
+        return app.bot_identity(self._repo_slug(run_id) or "")
 
     def _commit_trailer(self, run_id) -> str:
         """`Co-Authored-By: <bot>` line for auto-mode commits — the user
@@ -226,7 +226,7 @@ class SessionManager(ReviewOps, LifecycleOps):
         if app is None:
             return ""
         try:
-            login, email = app.bot_identity()
+            login, email = app.bot_identity(self._repo_slug(run_id) or "")
         except Exception:
             return ""
         return f"Co-Authored-By: {login} <{email}>"
@@ -1382,7 +1382,8 @@ class SessionManager(ReviewOps, LifecycleOps):
         yield TurnEvent("phase", {"name": "qa", "label": "Browser QA"})
         yield from self._stream_worker(
             run_id, env, build_qa_prompt(list(plan.acceptance),
-                                         self._app_url(run_id), credentials=creds),
+                                         self._app_url(run_id), credentials=creds,
+                                         lessons=self._lessons(run_id)),
             chosen, redact=lambda s: redact_secrets(s, secrets))
         qa = self._read_qa(run_id)
         failed = qa.failures if qa else []
