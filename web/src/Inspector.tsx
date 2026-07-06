@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { AppFrame } from "./AppFrame";
 import { DiffView } from "./DiffView";
 import { VerifyView } from "./VerifyView";
+import { workspaceHash } from "./deepLink";
 
 /* ── Types ── */
 interface InspectorProps {
@@ -55,6 +56,15 @@ export function Inspector({ activeId, webUrl, localUrl }: InspectorProps) {
             {t.label}
           </button>
         ))}
+        {previewUrl && (
+          <a
+            className="inspector-tab workspace-open"
+            href={workspaceHash(activeId)}
+            title="Open the live workspace (app + chat side by side)"
+          >
+            🗔 workspace
+          </a>
+        )}
       </div>
 
       <div className="inspector-body">
