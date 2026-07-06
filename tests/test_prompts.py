@@ -266,6 +266,31 @@ def test_qa_prompt_directs_agent_to_shared_cdp_browser():
     assert "fall back" in q.lower()
 
 
+def test_task_prompt_directs_agent_to_shared_cdp_browser():
+    # The executor's browser work (reproducing the bug, checking the fix,
+    # capturing artifacts) must happen in the same shared Chromium — a
+    # self-launched browser works but streams nothing to the workspace.
+    t = build_task_prompt("fix the header", app_url="http://web:3000")
+    assert "connectOverCDP" in t
+    assert "127.0.0.1:9222" in t
+    assert "fall back" in t.lower()
+
+
+def test_task_prompt_without_app_url_has_no_shared_browser():
+    # No live app → no shared browser was started; don't send the agent to a
+    # CDP endpoint that doesn't exist.
+    t = build_task_prompt("fix the header")
+    assert "connectOverCDP" not in t
+
+
+def test_qa_fix_prompt_directs_agent_to_shared_cdp_browser():
+    # QA-fix turns re-exercise the app while fixing; that browsing should be
+    # watchable too.
+    from forge.prompts import build_qa_fix_prompt
+    p = build_qa_fix_prompt(["logout works"], "http://web:3000")
+    assert "connectOverCDP" in p
+
+
 def test_attachments_block_lists_paths():
     b = attachments_block(["/work/.forge/inbox/1-a.png"])
     assert "/work/.forge/inbox/1-a.png" in b

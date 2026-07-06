@@ -1828,6 +1828,32 @@ def test_qa_streams_agent_browser_and_stops_it_after(tmp_path):
     assert (d / "stop").exists()          # turn over → screencaster told to exit
 
 
+def test_execute_streams_agent_browser_during_executor_turn(tmp_path):
+    """The live view is not QA-only: the executor turn (where the agent
+    reproduces the bug and verifies its fix in a browser) starts the
+    screencaster too, and every streamed turn ends with the stop file."""
+    from forge import browserview
+    mgr, store, flow = _qa_mgr(tmp_path)
+    list(mgr.plan_task("r1", "Add logout",
+                       policy=flow.CheckpointPolicy.for_cli(auto=True)))
+    env = mgr._envs["r1"]                    # the env _execute ran on
+    launches = [argv for (argv, service) in env.detached]
+    assert len(launches) >= 2                # executor turn + QA turn(s)
+    assert all("screencast" in " ".join(a) for a in launches)
+    d = browserview.live_dir(mgr.cfg.runs_dir, "r1")
+    assert (d / "stop").exists()             # last turn over → told to exit
+
+
+def test_turn_streams_agent_browser(tmp_path):
+    """Interactive follow-up turns get the live agent-browser view too."""
+    from forge import browserview
+    mgr, store, flow = _qa_mgr(tmp_path)
+    list(mgr.turn("r1", "tweak the header"))
+    env = mgr._envs["r1"]
+    assert env.detached and "screencast" in " ".join(env.detached[0][0])
+    assert (browserview.live_dir(mgr.cfg.runs_dir, "r1") / "stop").exists()
+
+
 def test_qa_inconclusive_when_no_qa_json(tmp_path):
     mgr, store, flow = _planner_mgr(tmp_path)   # PlannerEnv writes plan.json, not qa.json
     env = mgr._env_for("r1")

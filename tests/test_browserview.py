@@ -41,6 +41,16 @@ def test_start_writes_script_clears_stale_files_and_execs(tmp_path):
     assert "NODE_PATH" in joined and browserview.SCRIPT_NAME in joined
 
 
+def test_screencast_skips_blank_only_pages():
+    # Executor turns start the screencaster long before the agent first opens a
+    # page. Until a page has real content the script must emit NO frames —
+    # otherwise the workspace pane flips to a white about:blank shot the moment
+    # the turn starts, hiding the running app for nothing.
+    assert "about:blank" in browserview.SCREENCAST_JS
+    assert ("return busy.length ? busy[busy.length - 1] : null"
+            in browserview.SCREENCAST_JS)
+
+
 def test_start_is_best_effort_on_exec_failure(tmp_path):
     assert browserview.start(tmp_path, "r1", ExplodingEnv()) is False
 

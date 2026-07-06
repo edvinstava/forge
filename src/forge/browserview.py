@@ -1,11 +1,12 @@
-"""Live agent-browser streaming: watch the QA agent drive the app.
+"""Live agent-browser streaming: watch the agent drive the app.
 
-For every browser-QA turn forge starts a *shared* headless Chromium (CDP on
-127.0.0.1:9222) plus a screencaster inside the worker container. The QA prompt
-tells the agent to `connectOverCDP` to that browser instead of launching its
-own, so the screencaster — a second CDP client — can screenshot whatever page
-the agent is driving (~1 fps JPEG) into `/work/.forge/live/`. The bind-mounted
-workspace makes the frames host-visible, where `GET
+For every browser-visible turn — the executor reproducing a bug and checking
+its fix, browser QA, QA-fix — forge starts a *shared* headless Chromium (CDP
+on 127.0.0.1:9222) plus a screencaster inside the worker container. The turn's
+prompt tells the agent to `connectOverCDP` to that browser instead of launching
+its own, so the screencaster — a second CDP client — can screenshot whatever
+page the agent is driving (~1 fps JPEG) into `/work/.forge/live/`. The
+bind-mounted workspace makes the frames host-visible, where `GET
 /api/sessions/{id}/browser[/frame]` serves them to the workspace UI.
 
 Everything here is strictly best-effort: a missing browser, a failed exec or an
@@ -74,13 +75,14 @@ async function ensureBrowser() {
 }
 
 // The agent may open pages in the default context or a context of its own;
-// both are visible here. Prefer the newest page that has real content.
+// both are visible here. Pick the newest page with real content — and none
+// while everything is still about:blank: executor turns start this stream
+// long before the agent first navigates, and a white placeholder frame would
+// flip the workspace pane away from the running app for nothing.
 function pickPage(browser) {
   const pages = browser.contexts().flatMap((c) => c.pages());
-  if (!pages.length) return null;
   const busy = pages.filter((p) => p.url() && p.url() !== 'about:blank');
-  const pool = busy.length ? busy : pages;
-  return pool[pool.length - 1];
+  return busy.length ? busy[busy.length - 1] : null;
 }
 
 function writeAtomic(name, data) {

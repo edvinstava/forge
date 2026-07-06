@@ -900,7 +900,14 @@ class SessionManager(ReviewOps, LifecycleOps):
             chosen = self.provider.resolve_model(model, prompt)
             yield TurnEvent("model", {"choice": model, "resolved": chosen})
             yield TurnEvent("phase", {"name": "agent", "label": "Agent working"})
-            result = yield from self._stream_worker(run_id, env, full, chosen)
+            # Interactive turns browse too (repro + post-fix check) — stream it.
+            from forge import browserview
+            if self._app_url(run_id):
+                browserview.start(self.cfg.runs_dir, run_id, env)
+            try:
+                result = yield from self._stream_worker(run_id, env, full, chosen)
+            finally:
+                browserview.stop(self.cfg.runs_dir, run_id)
             if result is None:
                 yield TurnEvent("error", {"kind": "worker", "detail": "no result event"})
                 return
@@ -1147,11 +1154,21 @@ class SessionManager(ReviewOps, LifecycleOps):
             att_names = []
         chosen = self.provider.resolve_model(model, task)
         yield TurnEvent("phase", {"name": "agent", "label": "Agent working"})
-        result = yield from self._stream_worker(
-            run_id, env, build_task_prompt(task, self._app_url(run_id),
-                                           env=self._runtime_facts(run_id),
-                                           attachments=self._attachment_paths(run_id, att_names),
-                                           lessons=self._lessons(run_id)), chosen)
+        # Live agent-browser view (same deal as _qa): the executor reproduces
+        # the bug and verifies its fix in a browser — stream that browsing to
+        # the workspace. Best-effort; only worth a Chromium when a live app
+        # exists (the prompt only mentions the shared browser then too).
+        from forge import browserview
+        if self._app_url(run_id):
+            browserview.start(self.cfg.runs_dir, run_id, env)
+        try:
+            result = yield from self._stream_worker(
+                run_id, env, build_task_prompt(task, self._app_url(run_id),
+                                               env=self._runtime_facts(run_id),
+                                               attachments=self._attachment_paths(run_id, att_names),
+                                               lessons=self._lessons(run_id)), chosen)
+        finally:
+            browserview.stop(self.cfg.runs_dir, run_id)
         if result is None:
             self.store.set_lifecycle_state(run_id, flow.FAILED)
             yield TurnEvent("error", {"kind": "worker", "detail": "no result event"})
@@ -1435,9 +1452,14 @@ class SessionManager(ReviewOps, LifecycleOps):
                 break                           # needs a human → stop, don't "fix"
             it += 1
             chosen = self.provider.resolve_model(model, "fix acceptance failures")
-            self._run_worker(run_id, env,
-                             build_qa_fix_prompt(failed, self._app_url(run_id)),
-                             chosen)
+            from forge import browserview
+            browserview.start(self.cfg.runs_dir, run_id, env)
+            try:
+                self._run_worker(run_id, env,
+                                 build_qa_fix_prompt(failed, self._app_url(run_id)),
+                                 chosen)
+            finally:
+                browserview.stop(self.cfg.runs_dir, run_id)
             ci = yield from self._repair(run_id, env, self._get_verify_plan(run_id), model)
             if ci:
                 return ci                       # a QA fix broke CI → bottom-out
