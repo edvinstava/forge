@@ -117,6 +117,19 @@ def test_finish_pr_restores_lockfile_churn_before_committing(tmp_path):
     assert lock_idx < add_idx
 
 
+def test_finish_pr_refreshes_scratch_exclude_before_commit(tmp_path):
+    """A warm env can outlive the forge that provisioned it (its exclude file
+    predates patterns added since, e.g. .forge/live/). _finish_pr must refresh
+    .git/info/exclude before `git add -A` so new scratch can't ride into the PR."""
+    mgr, store, cfg = _mgr(tmp_path)
+    env = RecordingEnv()
+    res = mgr._finish_pr("r1", env, verify_failed=[])
+    assert res["ok"]
+    exclude = cfg.runs_dir / "r1" / "workspace" / ".git" / "info" / "exclude"
+    assert exclude.is_file(), "exclude file was not refreshed before commit"
+    assert ".forge/*" in exclude.read_text()
+
+
 def test_finish_pr_draft_warning_leads_the_body(tmp_path):
     mgr, store, cfg = _mgr(tmp_path)
     env = RecordingEnv()

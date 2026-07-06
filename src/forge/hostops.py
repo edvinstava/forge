@@ -4,19 +4,22 @@ from pathlib import Path
 
 from forge.container import ExecResult
 
-# Patterns that forge writes during a run but must NEVER appear in a PR diff.
-# Written to <ws>/.git/info/exclude (local-only — never tracked) so that
-# `git add -A` silently ignores them regardless of call-site ordering.
+# Files forge writes during a run must NEVER appear in a PR diff. Written to
+# <ws>/.git/info/exclude (local-only — never tracked) so that `git add -A`
+# silently ignores them regardless of call-site ordering.
+#
+# Default-deny: everything under .forge/ is scratch unless re-included below.
+# Enumerating scratch files per-feature leaked twice (.forge/pr.json, then
+# .forge/live/ into a real PR) — new writers must not need to know this list
+# exists. The negations must stay AFTER ".forge/*": gitignore is
+# last-match-wins, and a negation can only re-include a path whose parent
+# directory isn't itself excluded (".forge/*" excludes children, not .forge/).
 _FORGE_SCRATCH_PATTERNS = [
     "/report.md",
-    ".forge/plan.json",
-    ".forge/qa.json",
-    ".forge/review.json",
-    ".forge/lessons.json",
-    ".forge/pr.json",
-    ".forge/pr.diff",
-    ".forge/artifacts/",
-    ".forge/inbox/",
+    ".forge/*",
+    "!.forge/repo.yml",
+    "!.forge/env.yml",
+    "!.forge/verify.sh",
 ]
 
 
@@ -41,8 +44,9 @@ def exclude_forge_scratch(host, ws: str) -> None:
 
     Uses .git/info/exclude rather than a tracked .gitignore so the file never
     appears in the repo's own tree or the PR diff.  Repo-authored config files
-    (.forge/repo.yml, .forge/env.yml, .forge/verify.sh) are NOT excluded and
-    will still be picked up by `git add -A`.
+    (.forge/repo.yml, .forge/env.yml, .forge/verify.sh) are re-included and
+    will still be picked up by `git add -A`; gitignore never affects files the
+    repo already tracks, so tracked .forge/ content keeps flowing either way.
     """
     exclude_rel = ".git/info/exclude"
     existing = host.read(ws, exclude_rel) or ""

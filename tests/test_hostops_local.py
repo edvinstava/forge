@@ -80,16 +80,15 @@ from forge.hostops import exclude_forge_scratch  # noqa: E402
 
 _SCRATCH_PATTERNS = [
     "/report.md",
-    ".forge/plan.json",
-    ".forge/qa.json",
-    ".forge/review.json",
-    ".forge/lessons.json",
-    ".forge/artifacts/",
+    ".forge/*",
+    "!.forge/repo.yml",
+    "!.forge/env.yml",
+    "!.forge/verify.sh",
 ]
 
 
 def test_exclude_forge_scratch_adds_all_patterns(tmp_path):
-    """All six scratch patterns are written to .git/info/exclude."""
+    """All scratch patterns are written to .git/info/exclude."""
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / ".git" / "info").mkdir(parents=True)
@@ -125,15 +124,15 @@ def test_exclude_forge_scratch_crlf_idempotent(tmp_path):
     ws.mkdir()
     (ws / ".git" / "info").mkdir(parents=True)
     # Write with CRLF line endings
-    (ws / ".git" / "info" / "exclude").write_text("# header\r\n.forge/plan.json\r\n")
+    (ws / ".git" / "info" / "exclude").write_text("# header\r\n.forge/*\r\n")
 
     h = LocalHost()
     exclude_forge_scratch(h, str(ws))
     exclude_forge_scratch(h, str(ws))
 
     content = (ws / ".git" / "info" / "exclude").read_text()
-    # .forge/plan.json should appear exactly once despite CRLF
-    assert content.count(".forge/plan.json") == 1, ".forge/plan.json duplicated on CRLF file"
+    # .forge/* should appear exactly once despite CRLF
+    assert content.count(".forge/*") == 1, ".forge/* duplicated on CRLF file"
 
 
 def test_exclude_forge_scratch_preserves_existing_content(tmp_path):
@@ -164,20 +163,7 @@ def test_exclude_forge_scratch_handles_missing_exclude_file(tmp_path):
         assert pat in content, f"Pattern {pat!r} missing when exclude was absent"
 
 
-def test_exclude_forge_scratch_real_git(tmp_path):
-    """Real-git proof: all 6 scratch patterns are NOT staged; repo-authored .forge/repo.yml IS staged."""
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    # Init a real git repo with an initial commit
-    subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=ws, check=True)
-    (ws / "README.md").write_text("hi")
-    subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=ws, check=True, capture_output=True)
-
-    # Write all 6 scratch patterns and repo-authored config
+def _write_scratch_and_config(ws):
     (ws / ".forge").mkdir()
     (ws / ".forge" / "plan.json").write_text('{"plan": []}')
     (ws / ".forge" / "qa.json").write_text('{"qa": []}')
@@ -185,44 +171,89 @@ def test_exclude_forge_scratch_real_git(tmp_path):
     (ws / ".forge" / "lessons.json").write_text('{"lessons": []}')
     (ws / ".forge" / "artifacts").mkdir()
     (ws / ".forge" / "artifacts" / "x.png").write_bytes(b"\x89PNG")
+    # The browser live view (frame dumps + screencaster) — PR #232's leak
+    (ws / ".forge" / "live").mkdir()
+    (ws / ".forge" / "live" / "frame.jpg").write_bytes(b"\xff\xd8JPEG")
+    (ws / ".forge" / "live" / "meta.json").write_text('{"url": "x"}')
+    (ws / ".forge" / "live" / "screencast.cjs").write_text("// script")
+    (ws / ".forge" / "live" / "screencast.log").write_text("attached")
+    (ws / ".forge" / "live" / "stop").write_text("")
+    # A scratch file no one has invented yet — default-deny must cover it
+    (ws / ".forge" / "future-scratch.json").write_text("{}")
     (ws / "report.md").write_text("# PR body")
-    (ws / ".forge" / "repo.yml").write_text("name: my-repo")  # repo-authored — must be staged
+    # Repo-authored config surface — must all be staged
+    (ws / ".forge" / "repo.yml").write_text("name: my-repo")
+    (ws / ".forge" / "env.yml").write_text("env: {}")
+    (ws / ".forge" / "verify.sh").write_text("#!/bin/sh\ntrue")
 
-    # Apply the exclude
-    exclude_forge_scratch(LocalHost(), str(ws))
 
-    # Run git add -A and check what's staged
+def _staged(ws):
     subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True)
     result = subprocess.run(
         ["git", "-C", str(ws), "diff", "--cached", "--name-only"],
         capture_output=True, text=True, check=True,
     )
-    staged = set(result.stdout.strip().splitlines())
+    return set(result.stdout.strip().splitlines())
 
-    # All 6 scratch files must NOT be staged
-    assert "report.md" not in staged, "report.md leaked into staged files"
-    assert ".forge/plan.json" not in staged, ".forge/plan.json leaked into staged files"
-    assert ".forge/qa.json" not in staged, ".forge/qa.json leaked into staged files"
-    assert ".forge/review.json" not in staged, ".forge/review.json leaked into staged files"
-    assert ".forge/lessons.json" not in staged, ".forge/lessons.json leaked into staged files"
-    assert ".forge/artifacts/x.png" not in staged, ".forge/artifacts/x.png leaked into staged files"
 
-    # Repo-authored config MUST be staged
-    assert ".forge/repo.yml" in staged, ".forge/repo.yml was excluded but should reach the PR"
+_LEAKS = ["report.md", ".forge/plan.json", ".forge/qa.json", ".forge/review.json",
+          ".forge/lessons.json", ".forge/artifacts/x.png", ".forge/live/frame.jpg",
+          ".forge/live/meta.json", ".forge/live/screencast.cjs",
+          ".forge/live/screencast.log", ".forge/live/stop",
+          ".forge/future-scratch.json"]
+_CONFIG = [".forge/repo.yml", ".forge/env.yml", ".forge/verify.sh"]
+
+
+def test_exclude_forge_scratch_real_git(tmp_path):
+    """Real-git proof: everything under .forge/ (known scratch, the live view,
+    and files not invented yet) is NOT staged; the repo-authored config
+    surface IS staged."""
+    ws = tmp_path / "ws"
+    _init_repo(ws)
+    _write_scratch_and_config(ws)
+
+    exclude_forge_scratch(LocalHost(), str(ws))
+
+    staged = _staged(ws)
+    for leak in _LEAKS:
+        assert leak not in staged, f"{leak} leaked into staged files"
+    for keep in _CONFIG:
+        assert keep in staged, f"{keep} was excluded but should reach the PR"
+
+
+def test_exclude_forge_scratch_upgrades_legacy_workspace(tmp_path):
+    """A workspace provisioned by an older forge already has the enumerated
+    per-file patterns in its exclude. Re-running the new exclude must append
+    the default-deny block AFTER them and still re-include the config surface
+    (gitignore is last-match-wins, so ordering is load-bearing)."""
+    ws = tmp_path / "ws"
+    _init_repo(ws)
+    _write_scratch_and_config(ws)
+    legacy = ("/report.md\n.forge/plan.json\n.forge/qa.json\n.forge/review.json\n"
+              ".forge/lessons.json\n.forge/pr.json\n.forge/pr.diff\n"
+              ".forge/artifacts/\n.forge/inbox/\n")
+    (ws / ".git" / "info" / "exclude").write_text(legacy)
+
+    exclude_forge_scratch(LocalHost(), str(ws))
+
+    staged = _staged(ws)
+    for leak in _LEAKS:
+        assert leak not in staged, f"{leak} leaked from a legacy workspace"
+    for keep in _CONFIG:
+        assert keep in staged, f"{keep} lost to the legacy exclude ordering"
 
 
 def test_exclude_covers_attachment_inbox(tmp_path):
-    """Attachment inbox patterns are excluded so user images don't leak into PR diffs."""
+    """User-attached images in .forge/inbox/ don't leak into PR diffs."""
     ws = tmp_path / "ws"
-    ws.mkdir()
-    (ws / ".git" / "info").mkdir(parents=True)
-    (ws / ".git" / "info" / "exclude").write_text("# git default header\n")
+    _init_repo(ws)
+    (ws / ".forge" / "inbox").mkdir(parents=True)
+    (ws / ".forge" / "inbox" / "img.png").write_bytes(b"\x89PNG")
 
-    h = LocalHost()
-    exclude_forge_scratch(h, str(ws))
+    exclude_forge_scratch(LocalHost(), str(ws))
 
-    content = (ws / ".git" / "info" / "exclude").read_text()
-    assert ".forge/inbox/" in content, ".forge/inbox/ pattern missing from exclude file"
+    assert ".forge/inbox/img.png" not in _staged(ws), \
+        ".forge/inbox/img.png leaked into staged files"
 
 
 def test_hardened_git_neutralizes_repo_config_execution_vectors():

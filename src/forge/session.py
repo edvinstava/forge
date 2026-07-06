@@ -825,6 +825,13 @@ class SessionManager(ReviewOps, LifecycleOps):
         # clear its skip-worktree) around the commit so an agent's REAL config
         # edits ship in the PR while forge's block never does.
         ws = str(Path(self.cfg.runs_dir) / run_id / "workspace")
+        # A warm env can outlive the forge that provisioned it, leaving its
+        # exclude file without patterns added since — refresh at the moment
+        # that matters, right before `git add -A`.
+        try:
+            exclude_forge_scratch(self.host, ws)
+        except Exception:
+            pass
         try:
             unpatched = nextdev.unpatch_for_commit(self.host, ws)
         except Exception:
