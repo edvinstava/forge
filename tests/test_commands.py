@@ -25,6 +25,23 @@ def test_worker_cmd_no_resume_first_turn():
     assert "--resume" not in c.worker_cmd("p", None, None)
 
 
+def test_push_cmd_hardens_container_git_against_repo_hooks():
+    # The push runs in-container against the agent-writable /work/.git while
+    # GH_TOKEN is in the env. A planted pre-push hook / repo credential.helper
+    # must not be able to execute and capture the token.
+    cmd = c.push_cmd("forge/x")
+    assert cmd[0] == "git"
+    assert cmd[-4:] == ["push", "-u", "origin", "forge/x"]
+    joined = " ".join(cmd)
+    assert "core.hooksPath=/dev/null" in joined     # no repo hooks fire
+    assert "core.fsmonitor=false" in joined
+    # the repo's credential.helper list is reset, then gh re-added as the only one
+    assert "credential.helper=" in cmd
+    assert "credential.helper=!gh auth git-credential" in cmd
+    assert cmd.index("credential.helper=") < cmd.index(
+        "credential.helper=!gh auth git-credential")
+
+
 def test_pr_create_draft_flag():
     assert "--draft" in c.pr_create_cmd("t", "body.md", draft=True)
     assert "--draft" not in c.pr_create_cmd("t", "body.md", draft=False)
