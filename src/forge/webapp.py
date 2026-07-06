@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from forge import inbox, repos
 
@@ -144,6 +144,28 @@ def create_app(config, store, manager) -> FastAPI:
             "verify_output": meta.get("verify_output") or "",
             "model": meta.get("model"),
         }
+
+    # Live agent-browser view (workspace #live=<id>): the QA screencaster drops
+    # JPEG frames into the run's workspace (forge/browserview.py); these two
+    # routes let the UI poll them. Frames deliberately bypass the SSE bus —
+    # base64 frames would bloat the replay buffer and the Slack tap.
+    @app.get("/api/sessions/{run_id}/browser")
+    def browser_status(run_id: str):
+        if not store.get_run(run_id):
+            raise HTTPException(404, "no such session")
+        from forge import browserview
+        return browserview.status(config.runs_dir, run_id)
+
+    @app.get("/api/sessions/{run_id}/browser/frame")
+    def browser_frame(run_id: str):
+        if not store.get_run(run_id):
+            raise HTTPException(404, "no such session")
+        from forge import browserview
+        p = browserview.frame_path(config.runs_dir, run_id)
+        if not p.is_file():
+            raise HTTPException(404, "no live frame")
+        return FileResponse(p, media_type="image/jpeg",
+                            headers={"Cache-Control": "no-store"})
 
     @app.post("/api/sessions")
     async def start_session(req: Request):
@@ -337,7 +359,11 @@ def public_request_allowed(host: str, method: str, path: str,
     # Strip port and any trailing dot ("host." is the FQDN root form of
     # "host" — leaving it unnormalized is a classic Host-ACL bypass).
     h = (host or "").split(":", 1)[0].rstrip(".").lower()
-    if h in _LOCAL_HOSTS:
+    # *.localhost is loopback by definition (RFC 6761; browsers hardcode it):
+    # the workspace serves itself from http://forge.localhost:<port> so its
+    # app iframe (run-<id>.forge.localhost) is same-site and login cookies
+    # survive — the API must accept that Host too.
+    if h in _LOCAL_HOSTS or h.endswith(".localhost"):
         return True
     return method.upper() == "POST" and path == "/api/github/webhook"
 

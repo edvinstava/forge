@@ -549,3 +549,41 @@ def test_session_detail_includes_plan_field(tmp_path):
     store.set_plan("r2", '{"goal":"Add logout"}')
     body = client.get("/api/sessions/r2").json()
     assert body["plan"]["goal"] == "Add logout"
+
+
+# ---------------------------------------------------------------------------
+# Live agent-browser view: GET /api/sessions/{id}/browser[/frame]
+# ---------------------------------------------------------------------------
+
+def test_browser_endpoints_404_for_unknown_run(tmp_path):
+    client, _, _ = _client(tmp_path)
+    assert client.get("/api/sessions/nope/browser").status_code == 404
+    assert client.get("/api/sessions/nope/browser/frame").status_code == 404
+
+
+def test_browser_status_inactive_before_any_stream(tmp_path):
+    client, store, _ = _client(tmp_path)
+    store.create_run("r1", "o/r", "", "forge/x")
+    body = client.get("/api/sessions/r1/browser").json()
+    assert body == {"active": False, "ts": 0, "url": "", "title": ""}
+    assert client.get("/api/sessions/r1/browser/frame").status_code == 404
+
+
+def test_browser_status_and_frame_served_from_workspace(tmp_path):
+    import json as _j
+    from forge import browserview
+    client, store, _ = _client(tmp_path)
+    store.create_run("r1", "o/r", "", "forge/x")
+    d = browserview.live_dir(tmp_path / "runs", "r1")
+    d.mkdir(parents=True)
+    (d / "frame.jpg").write_bytes(b"\xff\xd8fakejpeg")
+    (d / "meta.json").write_text(_j.dumps({"url": "http://web:3000/x", "title": "X"}))
+
+    body = client.get("/api/sessions/r1/browser").json()
+    assert body["active"] is True and body["url"] == "http://web:3000/x"
+
+    res = client.get("/api/sessions/r1/browser/frame")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "image/jpeg"
+    assert res.headers["cache-control"] == "no-store"   # always the newest frame
+    assert res.content == b"\xff\xd8fakejpeg"

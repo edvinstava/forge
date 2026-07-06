@@ -45,6 +45,16 @@ def test_public_request_allowed_pure():
     assert public_request_allowed("evil.example", "POST", "/api/github/webhook", pub)
     # no public host configured => gate inert
     assert public_request_allowed(pub, "GET", "/api/sessions", "")
+    # *.localhost is loopback by definition (RFC 6761): the workspace serves
+    # itself from forge.localhost so its app iframe is same-site (cookies
+    # survive login) — that Host must keep full API access.
+    assert public_request_allowed("forge.localhost:8099", "GET",
+                                  "/api/sessions", pub)
+    assert public_request_allowed("run-abc.forge.localhost", "GET",
+                                  "/api/sessions", pub)
+    # ...but only as a true suffix label, not a lookalike public domain
+    assert not public_request_allowed("forge.localhost.evil.example", "GET",
+                                      "/api/sessions", pub)
 
 
 def test_public_request_allowed_strips_trailing_dot():
