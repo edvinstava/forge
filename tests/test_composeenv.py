@@ -124,3 +124,27 @@ def test_start_raises_on_failure(monkeypatch):
     monkeypatch.setattr(composeenv.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError):
         ComposeEnv("rid", []).start()
+
+
+def test_restart_targets_single_service(monkeypatch):
+    # Self-heal restarts only the web service; the worker + supabase stay up.
+    from forge import composeenv
+    captured = {}
+    def fake_run(cmd, **kw):
+        captured["cmd"], captured["timeout"] = cmd, kw.get("timeout")
+        class R: returncode, stdout, stderr = 0, "", ""
+        return R()
+    monkeypatch.setattr(composeenv.subprocess, "run", fake_run)
+    ComposeEnv("rid", [], down_timeout=12.0).restart("web")
+    assert captured["cmd"][-2:] == ["restart", "web"]
+    assert captured["timeout"] == 12.0          # bounded like stop/start
+
+
+def test_restart_raises_on_failure(monkeypatch):
+    from forge import composeenv
+    from forge.composeenv import ComposeEnv
+    monkeypatch.setattr(composeenv.subprocess, "run",
+                        lambda c, **k: type("R", (), {
+                            "returncode": 1, "stdout": "", "stderr": "boom"})())
+    with pytest.raises(RuntimeError):
+        ComposeEnv("rid", []).restart("web")

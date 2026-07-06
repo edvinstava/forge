@@ -577,6 +577,14 @@ def attach_background(app, config, store, manager):
                     except Exception:
                         logger.exception("dormant delete failed for %s", rid)
                 refresh_proxy(store, config)
+                # Recover any live web app stuck 5xx by a corrupted Next cache
+                # (clear .next + restart the dev server). Best-effort; a bad
+                # pass must never kill the reaper.
+                try:
+                    for rid in manager.heal_corrupted_web():
+                        logger.info("web self-heal: recovered %s", rid)
+                except Exception:
+                    logger.exception("web self-heal pass failed")
                 time.sleep(30)
 
         def schedule_loop():
