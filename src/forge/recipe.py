@@ -459,6 +459,106 @@ def _pick_web_service(services: dict):
     return name, _container_port(services[name])
 
 
+# --- repo compose is untrusted: sanitize before running it on the host -------
+#
+# A repo's own compose is executed with `docker compose up` on the HOST, so
+# every field is untrusted input. These service directives can each breach the
+# container boundary — grant extra Linux capabilities, share host namespaces,
+# expose host devices, or (via a bind mount) hand over the docker socket or the
+# host filesystem. Strip them from every repo service before running the stack.
+# Forge's own injected worker/web services are trusted and added AFTER
+# sanitizing. Compare knowledge._validate_services, which allowlists the far
+# smaller key set a learned env.yml overlay may set.
+_UNSAFE_COMPOSE_KEYS = (
+    "privileged", "cap_add", "devices", "device_cgroup_rules",
+    "pid", "ipc", "uts", "cgroup", "cgroupns_mode", "userns_mode",
+    "network_mode", "security_opt", "cgroup_parent", "sysctls", "group_add",
+)
+
+
+def _within_workspace(workspace_real: str, path) -> bool:
+    """True if a host path resolves inside the run workspace. Symlinks are
+    resolved first so a bind source can't tunnel out through a link."""
+    if not isinstance(path, str):
+        return False
+    ws = workspace_real.rstrip("/")
+    real = os.path.realpath(path)
+    return real == ws or real.startswith(ws + os.sep)
+
+
+def _is_bind_source(src) -> bool:
+    """A compose volume source is a HOST bind (vs a named volume) when it looks
+    like a path: absolute, home-relative, or containing a separator."""
+    return isinstance(src, str) and (src.startswith(("/", "~", ".")) or "/" in src)
+
+
+def _loopback_port(spec):
+    """Force a compose `ports` entry to publish on 127.0.0.1 only. A repo's
+    short-form '5432:5432' would otherwise bind 0.0.0.0 (every host interface,
+    incl. the LAN); forge's own recipes always bind loopback."""
+    if isinstance(spec, dict):
+        return {**spec, "host_ip": "127.0.0.1"}
+    if not isinstance(spec, (str, int)):
+        return spec
+    body, sep, proto = str(spec).partition("/")
+    parts = body.split(":")
+    if len(parts) >= 3:                       # host_ip present → force loopback
+        parts[0] = "127.0.0.1"
+        rebuilt = ":".join(parts)
+    elif len(parts) == 2:                     # host:container → pin host_ip
+        rebuilt = f"127.0.0.1:{parts[0]}:{parts[1]}"
+    else:                                     # container-only → ephemeral loopback
+        rebuilt = f"127.0.0.1::{parts[0]}"
+    return f"{rebuilt}/{proto}" if sep else rebuilt
+
+
+def _sanitize_service(svc: dict, name: str, workspace_real: str, removed: list) -> None:
+    """Strip boundary-breaching directives, drop bind mounts pointing outside
+    the workspace, and pin every published port to loopback — in place."""
+    for key in _UNSAFE_COMPOSE_KEYS:
+        if key in svc:
+            svc.pop(key, None)
+            removed.append(f"{name}.{key}")
+    vols = svc.get("volumes")
+    if isinstance(vols, list):
+        kept = []
+        for v in vols:
+            if isinstance(v, str) and ":" in v:
+                src = v.partition(":")[0]
+                if _is_bind_source(src) and not _within_workspace(workspace_real, src):
+                    removed.append(f"{name} volume {v!r}")
+                    continue
+            elif isinstance(v, dict) and v.get("type", "volume") == "bind":
+                if not _within_workspace(workspace_real, v.get("source", "")):
+                    removed.append(f"{name} volume {v.get('source')!r}")
+                    continue
+            kept.append(v)
+        if kept:
+            svc["volumes"] = kept
+        else:
+            svc.pop("volumes", None)
+    if isinstance(svc.get("ports"), list):
+        svc["ports"] = [_loopback_port(p) for p in svc["ports"]]
+
+
+def _sanitize_named_volumes(merged: dict, workspace_real: str, removed: list) -> None:
+    """A named volume can bind a host path via driver_opts (type: none, o: bind,
+    device: /) — a service-level volume check would miss it. Strip the bind
+    driver_opts from any top-level volume whose device escapes the workspace,
+    leaving a plain local volume."""
+    vols = merged.get("volumes")
+    if not isinstance(vols, dict):
+        return
+    for vname, spec in vols.items():
+        if not isinstance(spec, dict) or not isinstance(spec.get("driver_opts"), dict):
+            continue
+        device = spec["driver_opts"].get("device")
+        if _is_bind_source(device) and not _within_workspace(workspace_real, device):
+            spec.pop("driver_opts", None)
+            spec.pop("driver", None)
+            removed.append(f"volume {vname!r} host bind {device!r}")
+
+
 def repo_compose_recipe(workspace, worker_image, compose_text) -> Recipe | None:
     """Wrap a repo's own docker-compose file: parse it, anchor its relative
     paths at the cloned workspace, inject the `forge` worker so the agent can
@@ -478,9 +578,13 @@ def repo_compose_recipe(workspace, worker_image, compose_text) -> Recipe | None:
         return None        # injecting our worker would clobber theirs
     merged = copy.deepcopy(data)
     services = merged["services"]
-    for svc in services.values():
+    workspace_real = os.path.realpath(workspace)
+    removed: list = []
+    for name, svc in services.items():
         if isinstance(svc, dict):
             _absolutize_service(svc, workspace)
+            _sanitize_service(svc, name, workspace_real, removed)
+    _sanitize_named_volumes(merged, workspace_real, removed)
     web_service, web_port = _pick_web_service(services)
     if web_port is None:
         # A service with no resolvable port can't be health-checked or fronted;
@@ -495,11 +599,14 @@ def repo_compose_recipe(workspace, worker_image, compose_text) -> Recipe | None:
             worker["networks"] = (list(nets.keys()) if isinstance(nets, dict)
                                   else list(nets))
     services["forge"] = worker
-    return Recipe(
-        "repo-compose", True, merged, web_service, web_port, "/",
-        notes=("Wrapped the repo's own compose; forge worker injected. "
-               + (f"Web: {web_service}:{web_port}." if web_service
-                  else "No web service detected — stack runs, no public URL.")))
+    notes = ("Wrapped the repo's own compose; forge worker injected. "
+             + (f"Web: {web_service}:{web_port}." if web_service
+                else "No web service detected — stack runs, no public URL."))
+    if removed:
+        notes += (" Sandboxing stripped unsafe directives: "
+                  + ", ".join(removed) + ".")
+    return Recipe("repo-compose", True, merged, web_service, web_port, "/",
+                  notes=notes)
 
 
 def none_recipe(workspace, worker_image) -> Recipe:

@@ -67,8 +67,25 @@ def commit_cmds(message: str, name: str, email: str) -> list:
     ]
 
 
+# git -c overrides for the authenticated push, which runs INSIDE the worker
+# container against the agent-modified /work tree while GH_TOKEN is in its
+# environment. That workspace's .git is writable by the same uid as the
+# untrusted agent, so .git/config and .git/hooks are hostile input:
+# core.hooksPath (e.g. a planted pre-push), core.fsmonitor, and a repo-local
+# credential.helper can each make `git push` execute arbitrary code — and that
+# code would inherit the token from the push process's env. Neutralize all
+# three, then re-add gh as the sole credential helper so token-in-env auth
+# still works. Mirrors hostops.hardened_git, which protects the HOST-side git.
+_HARDENED_GIT = [
+    "-c", "core.fsmonitor=false",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "credential.helper=",
+    "-c", "credential.helper=!gh auth git-credential",
+]
+
+
 def push_cmd(branch: str) -> list:
-    return ["git", "push", "-u", "origin", branch]
+    return ["git", *_HARDENED_GIT, "push", "-u", "origin", branch]
 
 
 def pr_create_cmd(title: str, body_file: str, draft: bool) -> list:

@@ -400,9 +400,9 @@ def test_repo_compose_absolutizes_relative_paths():
     """, ws="/runs/ws")
     web = r.compose["services"]["web"]
     assert web["build"] == "/runs/ws/app"
-    assert "/runs/ws/data:/var/lib/data" in web["volumes"]
+    assert "/runs/ws/data:/var/lib/data" in web["volumes"]  # in-workspace bind kept
     assert "named_vol:/cache" in web["volumes"]        # named volume untouched
-    assert "/abs/host:/x" in web["volumes"]            # absolute source untouched
+    assert "/abs/host:/x" not in web["volumes"]        # out-of-workspace bind dropped
     assert web["env_file"] == "/runs/ws/.env"
 
 
@@ -449,6 +449,91 @@ def test_repo_compose_worker_joins_named_networks():
           appnet: {}
     """)
     assert r.compose["services"]["forge"]["networks"] == ["appnet"]
+
+
+def test_repo_compose_strips_boundary_breaking_directives():
+    # A malicious repo compose asking for privileged mode, host namespaces,
+    # extra caps, and the docker socket must be neutralized before it runs on
+    # the host. See the security model: the container is the boundary.
+    r = _wrap("""
+        services:
+          pwn:
+            image: alpine
+            privileged: true
+            pid: host
+            ipc: host
+            network_mode: host
+            userns_mode: host
+            cap_add: ["SYS_ADMIN"]
+            devices: ["/dev/kmsg:/dev/kmsg"]
+            security_opt: ["apparmor=unconfined"]
+            group_add: ["0"]
+            volumes:
+              - /var/run/docker.sock:/var/run/docker.sock
+              - /:/host:rw
+            ports: ["9000:9000"]
+    """, ws="/runs/ws")
+    pwn = r.compose["services"]["pwn"]
+    for k in ("privileged", "pid", "ipc", "network_mode", "userns_mode",
+              "cap_add", "devices", "security_opt", "group_add"):
+        assert k not in pwn, k
+    # both out-of-workspace binds (docker socket + host root) are gone
+    assert not pwn.get("volumes")
+    # published port pinned to loopback, not 0.0.0.0
+    assert pwn["ports"] == ["127.0.0.1:9000:9000"]
+    assert "pwn.privileged" in r.notes and "docker.sock" in r.notes
+
+
+def test_repo_compose_pins_ports_to_loopback():
+    from forge.recipe import _loopback_port
+    assert _loopback_port("5432:5432") == "127.0.0.1:5432:5432"
+    assert _loopback_port("0.0.0.0:80:80") == "127.0.0.1:80:80"
+    assert _loopback_port("3000") == "127.0.0.1::3000"
+    assert _loopback_port("8080:80/udp") == "127.0.0.1:8080:80/udp"
+    assert _loopback_port("192.168.1.5:80:80") == "127.0.0.1:80:80"
+    assert _loopback_port({"target": 80, "published": 80}) == {
+        "target": 80, "published": 80, "host_ip": "127.0.0.1"}
+    # container port still resolvable after the rewrite (for health/proxy)
+    from forge.recipe import _container_port
+    assert _container_port({"ports": [_loopback_port("5432:5432")]}) == 5432
+
+
+def test_repo_compose_keeps_safe_volumes_and_ports_after_sanitize():
+    r = _wrap("""
+        services:
+          web:
+            image: app
+            ports: ["127.0.0.1:8080:80", "3000"]
+            volumes:
+              - ./src:/app/src
+              - cache:/var/cache
+    """, ws="/runs/ws")
+    web = r.compose["services"]["web"]
+    assert "/runs/ws/src:/app/src" in web["volumes"]   # in-workspace bind kept
+    assert "cache:/var/cache" in web["volumes"]         # named volume kept
+    assert web["ports"] == ["127.0.0.1:8080:80", "127.0.0.1::3000"]
+    assert not r.notes.endswith("directives: .")        # nothing stripped
+
+
+def test_repo_compose_neutralizes_host_bind_named_volume():
+    # The driver_opts bind trick: a "named" volume that actually binds host `/`.
+    r = _wrap("""
+        services:
+          web:
+            image: app
+            ports: ["3000:3000"]
+            volumes:
+              - hostroot:/host
+        volumes:
+          hostroot:
+            driver_opts:
+              type: none
+              device: /
+              o: bind
+    """, ws="/runs/ws")
+    hostroot = r.compose["volumes"]["hostroot"]
+    assert "driver_opts" not in hostroot               # bind escape stripped
+    assert "host bind '/'" in r.notes
 
 
 def test_resolve_uses_repo_compose_when_no_package_json():

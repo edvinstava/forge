@@ -375,18 +375,27 @@ repositories they trust.** Understand these properties before exposing it more w
   direct. A **prompt-injecting repository** (malicious README / code comments) is a
   real threat: the agent's provider credential (Claude/Codex) is in the container,
   and the agent can be steered into hostile edits. Only point it at repos you trust.
+  A repo that ships its **own `docker-compose.yml`** can't widen that boundary: the
+  compose is wrapped and sanitized before it runs on the host — `privileged`,
+  `cap_add`, host namespaces/devices (`pid`/`ipc`/`network_mode`/`userns_mode`/…),
+  bind mounts pointing outside the run workspace (the Docker socket, host root), and
+  volumes that reach the host via `driver_opts` are all stripped, and every published
+  port is pinned to `127.0.0.1`.
 - **The worker container holds no GitHub token.** The container-resident `GH_TOKEN`
   is empty; a token is injected only into forge's own `git push` / `gh pr create`
   executions, one exec at a time. With the [GitHub App](#github-app-recommended)
   configured, that token is minted **per run, scoped to the single target repo, and
-  expires within an hour** — a hostile repo that manages to capture it during a push
-  (e.g. via a planted git hook or `.git/config` credential-helper trick) can reach
-  only itself, briefly. Without the App the fallback is your full-scope `GH_TOKEN`
+  expires within an hour**. Without the App the fallback is your full-scope `GH_TOKEN`
   PAT — still per-exec rather than resident, but one more reason to set the App up.
-- **Host-side git against agent-modified workspaces is hardened.** A workspace's
-  `.git/config` could otherwise make git execute arbitrary commands *on the host*
-  (via `core.fsmonitor`, `core.hooksPath`, or `credential.helper`); every host-side
-  git invocation against a run workspace overrides all three.
+- **Git against agent-modified workspaces is hardened — host-side and in-container.**
+  A workspace's `.git/config` and `.git/hooks` are attacker-writable, and git can be
+  made to execute arbitrary commands via `core.fsmonitor`, `core.hooksPath`, or
+  `credential.helper`. Every host-side git invocation against a run workspace
+  overrides all three. So does forge's **authenticated `git push`**, which runs inside
+  the worker container with `GH_TOKEN` in its environment: it disables repo hooks
+  (`core.hooksPath=/dev/null`) and resets the repo credential-helper list, so a planted
+  `pre-push` hook or `.git/config` credential-helper trick can't run to capture the
+  token.
 - **The web/`/api` surface is unauthenticated** (single-user, local). Keep it bound to
   loopback. In `--github` mode a public tunnel fronts the app, but the gate is an
   allowlist that exposes **only** the signed `POST /api/github/webhook` — any other
