@@ -104,6 +104,35 @@ def test_tap_errors_are_swallowed():
     assert seen.wait(2)      # second tap still ran; publisher never raised
 
 
+def test_close_wakes_a_blocked_get_immediately():
+    bus = EventBus()
+    sub = bus.subscribe("r")
+    woke = threading.Event()
+
+    def wait():
+        sub.get(timeout=10)      # nothing published: blocks until woken
+        woke.set()
+
+    threading.Thread(target=wait, daemon=True).start()
+    time.sleep(0.05)             # let the getter block
+    start = time.monotonic()
+    sub.close()
+    assert woke.wait(2)          # woken by close, not the 10s timeout
+    assert time.monotonic() - start < 2
+
+
+def test_close_all_closes_every_subscription_across_runs():
+    bus = EventBus()
+    subs = [bus.subscribe("r1"), bus.subscribe("r1"), bus.subscribe("r2")]
+    bus.close_all()
+    assert all(s.closed for s in subs)
+    bus.publish("r1", ev(text="x"), origin="web")   # publish after close is safe
+    late = bus.subscribe("r1")                      # bus still usable afterwards
+    bus.publish("r1", ev(text="y"), origin="web")
+    assert late.get(timeout=1)["data"] == {"text": "y"}
+    late.close()
+
+
 def test_concurrent_publish_keeps_seq_unique():
     bus = EventBus()
 

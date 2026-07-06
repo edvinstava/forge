@@ -83,6 +83,12 @@ class Subscription:
     def close(self) -> None:
         self.closed = True
         self._bus._unsubscribe(self)
+        # Wake a get() blocked on an empty queue so its consumer re-checks
+        # `closed` now instead of after the full heartbeat timeout.
+        try:
+            self._q.put_nowait(None)
+        except queue.Full:
+            pass                 # a full queue means the getter isn't blocked
 
 
 class EventBus:
@@ -136,6 +142,15 @@ class EventBus:
         with self._mu:
             self._subs.setdefault(run_id, []).append(sub)
         return sub
+
+    def close_all(self) -> None:
+        """Close every live subscription (server shutdown): wakes each blocked
+        SSE tail so its stream ends and uvicorn's connection wait can finish.
+        The bus stays usable — publish/subscribe still work afterwards."""
+        with self._mu:
+            subs = [s for lst in self._subs.values() for s in lst]
+        for sub in subs:
+            sub.close()
 
     def _unsubscribe(self, sub) -> None:
         with self._mu:

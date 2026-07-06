@@ -2,6 +2,7 @@
 bus buffer past `since`, then tail live events (heartbeats keep proxies from
 reaping idle streams). Lets the web UI watch turns driven from Slack/CLI."""
 import threading
+import time
 
 from fastapi.testclient import TestClient
 
@@ -87,6 +88,23 @@ def test_bus_events_tail_only_skips_history(tmp_path):
         assert "old" not in f and "new" in f
         break
     gen.close()
+
+
+def test_bus_events_tail_ends_when_bus_closes_all(tmp_path):
+    # Server shutdown closes all subscriptions; a tailing stream must end
+    # promptly (well before its heartbeat), or uvicorn waits on it forever.
+    bus = EventBus()
+    ended = threading.Event()
+
+    def consume():
+        for _ in bus_events(bus, "r", since=0, tail=True, heartbeat_secs=30):
+            pass
+        ended.set()
+
+    threading.Thread(target=consume, daemon=True).start()
+    time.sleep(0.05)             # let the tail block on its subscription
+    bus.close_all()
+    assert ended.wait(2)         # stream over in ms, not the 30s heartbeat
 
 
 def test_bus_events_emits_heartbeat_when_idle(tmp_path):
