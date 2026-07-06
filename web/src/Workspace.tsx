@@ -5,20 +5,23 @@ import { DiffView } from "./DiffView";
 import { VerifyView } from "./VerifyView";
 import { getConfig, getSession } from "./api";
 import { localPreviewUrl } from "./webUrl";
+import { useSplitPane } from "./splitPane";
 import type { ProxyConfig } from "./types";
 
 type Tab = "chat" | "diff" | "verify";
 
 /**
- * Focused, deep-linkable view (#live=<run_id>): the running app on the left
- * (~75%) and the agent chat on the right (~25%). Prompt the agent and watch the
- * app update live. Reuses AppFrame, Chat, and the diff/verify panels.
+ * Focused, deep-linkable view (#live=<run_id>): the running app on the left and
+ * the agent chat on the right, split by a draggable gutter (default ~75/25,
+ * persisted). Prompt the agent and watch the app update live. Reuses AppFrame,
+ * Chat, and the diff/verify panels.
  */
 export function Workspace({ runId }: { runId: string }) {
   const [webUrl, setWebUrl] = useState<string | null>(null);
   const [proxyConfig, setProxyConfig] = useState<ProxyConfig | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
   const [tab, setTab] = useState<Tab>("chat");
+  const { splitPct, shellRef, gutterHandlers } = useSplitPane();
 
   useEffect(() => {
     getConfig().then(setProxyConfig).catch(() => {});
@@ -48,10 +51,22 @@ export function Workspace({ runId }: { runId: string }) {
   ];
 
   return (
-    <div className="workspace-shell">
+    <div
+      className="workspace-shell"
+      ref={shellRef}
+      style={{ ["--split" as string]: splitPct }}
+    >
       <section className="workspace-app">
         <AppFrame webUrl={webUrl} localUrl={localUrl} reloadSignal={reloadSignal} />
       </section>
+      <div
+        className="workspace-gutter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize app and chat panes"
+        title="Drag to resize · double-click to reset"
+        {...gutterHandlers}
+      />
       <aside className="workspace-control">
         <div className="inspector-tabs">
           {TABS.map((t) => (

@@ -1916,10 +1916,14 @@ body {
   background: var(--state-failed-bg);
 }
 
-/* ── Live workspace: running app (75%) + control (25%) ── */
+/* ── Live workspace: running app + control, split by a draggable gutter ──
+   --split (app pane %) is set inline from React and defaults to 75. The gutter
+   is a fixed column; the control pane takes the remainder. */
 .workspace-shell {
+  --gutter-w: 6px;
   display: grid;
-  grid-template-columns: 3fr 1fr;
+  grid-template-columns:
+    minmax(0, calc(var(--split, 75) * 1%)) var(--gutter-w) minmax(0, 1fr);
   grid-template-rows: 100vh;
   height: 100vh;
   overflow: hidden;
@@ -1932,14 +1936,23 @@ body {
   background: var(--bg-base);
 }
 .workspace-app .preview-wrap { flex: 1; min-height: 0; }
-.workspace-control {
+.workspace-gutter {
   grid-column: 2;
-  border-left: 1px solid var(--border-subtle);
+  cursor: col-resize;
+  background: var(--border-subtle);
+  touch-action: none; /* let pointer drags own the gesture, not scroll */
+  transition: background 0.12s ease;
+}
+.workspace-gutter:hover,
+body.is-resizing .workspace-gutter {
+  background: var(--accent);
+}
+.workspace-control {
+  grid-column: 3;
   background: var(--bg-surface);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-width: 320px;
 }
 .workspace-control-body {
   flex: 1;
@@ -1948,6 +1961,13 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
+/* While dragging: freeze selection and stop the app iframe from swallowing the
+   pointer stream so the move events keep reaching the gutter. */
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.is-resizing iframe { pointer-events: none; }
 .workspace-exit {
   margin-left: auto;
   text-decoration: none;
@@ -1955,6 +1975,13 @@ body {
 }
 .workspace-open { margin-left: auto; text-decoration: none; }
 @media (max-width: 720px) {
+  /* Stack vertically; the horizontal gutter is meaningless, so hide it. */
   .workspace-shell { grid-template-columns: 1fr; grid-template-rows: 60vh 40vh; }
-  .workspace-control { grid-column: 1; border-left: none; border-top: 1px solid var(--border-subtle); }
+  .workspace-gutter { display: none; }
+  .workspace-control {
+    grid-column: 1;
+    grid-row: 2;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .workspace-app { grid-row: 1; }
 }
