@@ -101,6 +101,11 @@ class Config:
     knowledge_dir: Path = field(
         default_factory=lambda: Path.home() / ".forge" / "knowledge")
     self_heal: bool = True
+    # Background self-heal of a Next dev server whose Turbopack cache corrupted
+    # (every route 5xx): clear .next + restart the web service. Capped so a
+    # genuinely-broken app isn't churned. Gated by self_heal above.
+    web_heal_max_attempts: int = 2
+    web_heal_cooldown_secs: int = 180
     probe_max_iterations: int = 6
     gh_app_id: str = ""
     gh_app_private_key_path: str = ""
@@ -161,6 +166,10 @@ class Config:
             knowledge_dir=Path(os.environ.get(
                 "FORGE_KNOWLEDGE_DIR", str(Path.home() / ".forge" / "knowledge"))),
             self_heal=os.environ.get("FORGE_SELF_HEAL", "1") not in ("0", "false", "no"),
+            web_heal_max_attempts=int(
+                os.environ.get("FORGE_WEB_HEAL_MAX_ATTEMPTS", "2")),
+            web_heal_cooldown_secs=int(
+                os.environ.get("FORGE_WEB_HEAL_COOLDOWN_SECS", "180")),
             probe_max_iterations=int(os.environ.get("FORGE_PROBE_MAX_ITERATIONS", "6")),
             gh_app_id=os.environ.get("FORGE_GH_APP_ID", ""),
             gh_app_private_key_path=os.environ.get("FORGE_GH_APP_KEY", ""),

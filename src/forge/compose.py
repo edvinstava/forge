@@ -32,6 +32,12 @@ def start_cmd(project: str, files: list) -> list:
     return _base(project, files) + ["start"]
 
 
+def restart_cmd(project: str, files: list, service: str) -> list:
+    # Restart a SINGLE service in place (self-heal restarts the web/dev server
+    # after clearing its cache, leaving the worker + supabase untouched).
+    return _base(project, files) + ["restart", service]
+
+
 def exec_cmd(project: str, files: list, service: str, argv: list,
              workdir: str = "/work", env_keys=()) -> list:
     # -T disables TTY allocation so output is captured cleanly. env_keys are

@@ -31,6 +31,12 @@ def test_port_cmd():
         ["port", "web", "3000"]
 
 
+def test_restart_cmd_targets_one_service():
+    # Self-heal restarts ONLY the web service (leaves the worker + supabase up).
+    assert compose.restart_cmd("forge-x", ["a.yml"], "web") == [
+        "docker", "compose", "-p", "forge-x", "-f", "a.yml", "restart", "web"]
+
+
 def test_down_cmd_drops_volumes():
     cmd = compose.down_cmd("forge-x", ["a.yml"])
     assert "down" in cmd and "-v" in cmd

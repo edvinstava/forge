@@ -112,6 +112,21 @@ class ComposeEnv:
             raise RuntimeError(f"compose start failed (exit {out.returncode}): "
                                f"{tail[-1] if tail else 'unknown error'}")
 
+    def restart(self, service: str) -> None:
+        # Restart one service in place (self-heal). Bounded like stop/start, and
+        # raises on failure so the caller can log the failed heal.
+        try:
+            out = subprocess.run(
+                compose.restart_cmd(self.project, self.files, service),
+                capture_output=True, text=True, timeout=self.down_timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"compose restart {service} timed out")
+        if out.returncode != 0:
+            tail = (out.stderr or out.stdout).strip().splitlines()
+            raise RuntimeError(f"compose restart {service} failed "
+                               f"(exit {out.returncode}): "
+                               f"{tail[-1] if tail else 'unknown error'}")
+
     def exec_stream(self, argv: list, workdir: str = "/work",
                     service: str | None = None):
         svc = service or self.worker_service

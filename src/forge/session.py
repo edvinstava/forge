@@ -28,6 +28,7 @@ from forge.knowledge import KnowledgeStore
 from forge import envprobe
 from forge import nextdev
 from forge import proxy
+from forge import webheal
 from forge.runspec import make_runspec, normalize_github_repo
 from forge.session_lifecycle import LifecycleOps
 from forge.session_review import ReviewOps
@@ -77,6 +78,9 @@ class SessionManager(ReviewOps, LifecycleOps):
         self._active_lock = threading.Lock()
         self._waking: set = set()
         self._envs: dict = {}               # run_id -> cached ComposeEnv (live _proc)
+        # Web self-heal budget per run: {run_id: {"attempts", "last"}}. In-memory
+        # so a forge restart re-arms healing (a fresh process should retry).
+        self._heal_state: dict = {}
         self._sleep_requested: dict = {}  # run_id → reason; warm-sleep at next boundary
         # Per-run progress sinks the scheduler passes to run_autonomous when it
         # dispatches a queued run (Slack registers a thread renderer here).
@@ -252,10 +256,13 @@ class SessionManager(ReviewOps, LifecycleOps):
     def _compose_path(self, run_id) -> Path:
         return Path(self.cfg.runs_dir) / run_id / "forge-compose.yml"
 
-    def _env_for(self, run_id):
+    def _build_env(self, run_id):
         cf = self._compose_path(run_id)
         files = [str(cf)] if cf.is_file() else []
-        env = self.env_factory(run_id, files)
+        return self.env_factory(run_id, files)
+
+    def _env_for(self, run_id):
+        env = self._build_env(run_id)
         # Remember the latest env per run so stop() can cancel whatever
         # subprocess is currently streaming (the env used right after this call).
         # Fresh instance each call is intentional — provision health-retry rebuilds.
@@ -588,6 +595,73 @@ class SessionManager(ReviewOps, LifecycleOps):
         url = public_url or (web_url(hp) if hp else None)
         self.store.set_env_state(run_id, "live", url)
         return url
+
+    # --- web self-heal (background) ---
+
+    def heal_corrupted_web(self) -> list:
+        """Recover live web apps stuck 5xx by a corrupted Next/Turbopack cache:
+        clear .next + restart the web service. Signature-gated (a real app 500 is
+        left alone) and attempt/cooldown capped. Called each reap tick. Returns
+        the run_ids healed this pass. Best-effort — never raises."""
+        if not self.cfg.self_heal:
+            return []
+        healed = []
+        for row in self.store.list_envs(states=("live",)):
+            rid, svc, port = (row.get("run_id"), row.get("web_service"),
+                              row.get("web_port"))
+            if not (rid and svc and port):
+                continue                       # worker-only env: nothing to heal
+            try:
+                if self._heal_one(rid, svc, port):
+                    healed.append(rid)
+            except Exception:
+                log.exception("web self-heal check failed for %s", rid)
+        return healed
+
+    def _heal_one(self, run_id, web_service, web_port) -> bool:
+        # Transient env (NOT cached in self._envs): the reap thread must not
+        # clobber the slot stop() uses to cancel a concurrent turn's stream.
+        env = self._build_env(run_id)
+        probe = env.exec(
+            webheal.status_probe_argv(web_service, web_port, self.cfg.health_path),
+            service="forge")
+        status = (probe.stdout or "").strip()
+        if not webheal.is_server_error(status):
+            # Serving (2xx/3xx/4xx) → a recovered app resets its heal budget for
+            # any future episode. Unreachable (000 / exit!=0) is a different
+            # failure — leave the budget untouched and skip.
+            if probe.exit_code == 0 and webheal.is_reachable(status):
+                self._heal_state.pop(run_id, None)
+            return False
+        if not webheal.is_corruption(env.logs(service=web_service)):
+            return False                       # a genuine 500, not cache corruption
+        if not self._heal_allowed(run_id):
+            return False
+        log.warning("web self-heal: run %s 5xx + Turbopack cache corruption; "
+                    "clearing .next and restarting %s", run_id, web_service)
+        env.exec(webheal.clear_cache_argv(), service="forge")
+        env.restart(web_service)
+        self._record_heal(run_id)
+        try:
+            self.bus.publish(run_id, TurnEvent("narration", {
+                "text": "🩹 self-heal: cleared a corrupted Next build cache and "
+                        "restarted the dev server."}), origin="heal")
+        except Exception:
+            log.exception("web self-heal event publish failed for %s", run_id)
+        return True
+
+    def _heal_allowed(self, run_id) -> bool:
+        st = self._heal_state.get(run_id)
+        if st is None:
+            return True
+        if st["attempts"] >= self.cfg.web_heal_max_attempts:
+            return False                       # budget exhausted — stop churning
+        return (self.clock() - st["last"]) >= self.cfg.web_heal_cooldown_secs
+
+    def _record_heal(self, run_id) -> None:
+        st = self._heal_state.setdefault(run_id, {"attempts": 0, "last": 0.0})
+        st["attempts"] += 1
+        st["last"] = self.clock()
 
     # --- turn helpers ---
 
