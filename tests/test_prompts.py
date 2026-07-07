@@ -139,6 +139,24 @@ def test_qa_prompt_lists_criteria_and_url_and_schema():
     assert "passed" in p          # the result schema field
 
 
+def test_qa_schema_documents_unverifiable_flag():
+    # Criteria that can only be observed post-merge (external dashboards, real
+    # CI/PR runs) must be recordable as unverifiable, not forced into pass/fail.
+    from forge.prompts import build_qa_prompt
+    p = build_qa_prompt(["c1"], "http://app")
+    assert '"unverifiable": true' in p
+    assert "after merge" in p
+
+
+def test_plan_prompt_requires_sandbox_verifiable_acceptance():
+    # The planner must not emit acceptance criteria that QA can never verify
+    # from the sandbox (they jam the QA repair loop with unfixable failures).
+    from forge.prompts import build_plan_prompt
+    p = build_plan_prompt("add logout")
+    assert "running app" in p
+    assert "after merge" in p
+
+
 def test_qa_fix_prompt_includes_failed_criteria_and_url():
     from forge.prompts import build_qa_fix_prompt
     p = build_qa_fix_prompt(["logout works"], "http://web:3000")

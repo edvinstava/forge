@@ -386,7 +386,8 @@ export function Chat({ sessionId, provisioningEvents, onUrl, onTurnDone }: ChatP
           dispatch({ type: "LIVE_REPAIR", iter: e.data?.iter ?? 0, failed: e.data?.failed ?? [] });
           break;
         case "qa":
-          dispatch({ type: "LIVE_QA", checked: e.data?.checked ?? 0, failed: e.data?.failed ?? [] });
+          dispatch({ type: "LIVE_QA", checked: e.data?.checked ?? 0, failed: e.data?.failed ?? [],
+            unverifiable: e.data?.unverifiable ?? [] });
           break;
         case "retrospective":
           dispatch({ type: "LIVE_RETRO", added: e.data?.added ?? 0 });
@@ -911,14 +912,18 @@ function BubbleView({ bubble, onRetry }: BubbleViewProps) {
                     {s.failed.length ? ` — ${s.failed.join(", ")}` : ""}
                   </div>
                 );
-              if (s.kind === "qa")
+              if (s.kind === "qa") {
+                const unv = s.unverifiable?.length
+                  ? ` · ${s.unverifiable.length} not verifiable from the sandbox: ${s.unverifiable.join(", ")}`
+                  : "";
                 return (
                   <div key={i} className={`seg-qa seg-qa--${s.pass ? "pass" : "fail"}`}>
                     {s.pass
-                      ? `✓ Browser QA — ${s.checked} checks passed`
-                      : `✕ Browser QA — ${s.failed.join(", ")}`}
+                      ? `✓ Browser QA — ${s.checked - (s.unverifiable?.length ?? 0)} checks passed${unv}`
+                      : `✕ Browser QA — ${s.failed.join(", ")}${unv}`}
                   </div>
                 );
+              }
               if (s.kind === "retrospective")
                 return s.added > 0 ? (
                   <div key={i} className="seg-retro">

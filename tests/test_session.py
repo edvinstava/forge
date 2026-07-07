@@ -2032,6 +2032,115 @@ def test_execute_advisory_qa_completes_despite_failure(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _qa_gate: unverifiable criteria + no-progress guard
+# ---------------------------------------------------------------------------
+
+class SeqQaEnv(PlannerEnv):
+    """Like QaEnv but writes the next qa.json from a per-instance sequence on
+    each QA turn (the last entry repeats), so tests can script progress /
+    no-progress across _qa_gate rounds."""
+
+    def exec_stream(self, argv, service=None, workdir="/work"):
+        if any(".forge/qa.json" in a for a in argv):
+            i = min(getattr(self, "qa_turn", 0), len(self.qa_seq) - 1)
+            self.qa_turn = getattr(self, "qa_turn", 0) + 1
+            d = Path(self._ws); (d / ".forge").mkdir(parents=True, exist_ok=True)
+            (d / ".forge" / "qa.json").write_text(_json.dumps(self.qa_seq[i]))
+            yield _json.dumps({"type": "result", "subtype": "success",
+                               "is_error": False, "session_id": "sess-qa",
+                               "result": "qa done", "total_cost_usd": 0.1,
+                               "num_turns": 1, "usage": {}})
+        else:
+            yield from self._write_plan_then_stream()
+
+
+def _seq_qa_mgr(tmp_path, qa_seq):
+    from forge import flow
+    cfg = Config(runs_dir=tmp_path / "runs", oauth_token="t", gh_token="g",
+                 budget=Budget(max_iterations=2, max_wall_secs=60))
+    store = Store(cfg.runs_dir / "forge.db")
+    store.create_run("r1", "o/r", "Add logout", "forge/x")
+    store.create_env("r1", "forge-r1", None, 3000, "live", web_service="web")
+
+    def factory(rid, files):
+        e = SeqQaEnv(rid, files); e.qa_seq = list(qa_seq)
+        e._ws = str(cfg.runs_dir / rid / "workspace")
+        Path(e._ws).mkdir(parents=True, exist_ok=True); return e
+    return SessionManager(cfg, store, FakeHost(), env_factory=factory), store, flow
+
+
+def test_qa_reports_unverifiable_criteria_without_failing(tmp_path):
+    dash = "Vercel dashboard shows pr-42 (only after merge)"
+    mgr, store, flow = _seq_qa_mgr(tmp_path, [{
+        "acceptance": [
+            {"criterion": "script emits meta flags", "passed": True},
+            {"criterion": dash, "passed": False, "unverifiable": True,
+             "evidence": "needs a real PR run"}],
+        "summary": "1 pass, 1 unverifiable"}])
+    env = mgr._env_for("r1")
+    plan = Plan(goal="x", acceptance=("script emits meta flags", dash))
+    events = []
+    failed = _drain_capture(mgr._qa("r1", env, plan, "auto"), events)
+    assert failed == []                              # unverifiable never gates
+    qa_events = [e for e in events if e.kind == "qa"]
+    assert qa_events and qa_events[-1].data["failed"] == []
+    assert qa_events[-1].data["unverifiable"] == [dash]
+
+
+def test_qa_gate_does_not_retry_unverifiable_only_failures(tmp_path):
+    dash = "dashboard shows pr-42"
+    mgr, store, flow = _seq_qa_mgr(tmp_path, [{
+        "acceptance": [{"criterion": dash, "passed": False, "unverifiable": True,
+                        "evidence": "post-merge only"}],
+        "summary": "unverifiable"}])
+    env = mgr._env_for("r1")
+    plan = Plan(goal="x", acceptance=(dash,))
+    out = _drain_capture(mgr._qa_gate("r1", env, plan, "auto"))
+    assert out == []
+    assert env.qa_turn == 1          # single QA pass — no pointless fix rounds
+
+
+def test_execute_completes_when_only_unverifiable_criteria_remain(tmp_path):
+    mgr, store, flow = _seq_qa_mgr(tmp_path, [{
+        "acceptance": [{"criterion": "logout works", "passed": False,
+                        "unverifiable": True, "evidence": "post-merge only"}],
+        "summary": "unverifiable only"}])
+    events = list(mgr.plan_task("r1", "Add logout",
+                                policy=flow.CheckpointPolicy.for_cli(auto=True)))
+    done = [e for e in events if e.kind == "done"]
+    assert done and done[-1].data.get("pr_url")      # no escalation checkpoint
+    assert store.get_run("r1")["lifecycle_state"] == "pr_open"
+
+
+def test_qa_gate_stops_after_no_progress_fix_round(tmp_path):
+    fail = {"acceptance": [{"criterion": "logout works", "passed": False,
+                            "evidence": "500"}], "summary": "0/1"}
+    mgr, store, flow = _seq_qa_mgr(tmp_path, [fail])   # same failure forever
+    env = mgr._env_for("r1")
+    plan = Plan(goal="x", acceptance=("logout works",))
+    out = _drain_capture(mgr._qa_gate("r1", env, plan, "auto"))
+    assert out == ["logout works"]
+    # Initial QA + one fix round + re-QA; the unchanged failure set stops the
+    # loop there instead of burning the whole max_repair_iters budget.
+    assert env.qa_turn == 2
+
+
+def test_qa_gate_keeps_iterating_while_fixes_make_progress(tmp_path):
+    both = {"acceptance": [{"criterion": "a", "passed": False},
+                           {"criterion": "b", "passed": False}], "summary": "0/2"}
+    one = {"acceptance": [{"criterion": "a", "passed": False},
+                          {"criterion": "b", "passed": True}], "summary": "1/2"}
+    mgr, store, flow = _seq_qa_mgr(tmp_path, [both, one, one])
+    env = mgr._env_for("r1")
+    plan = Plan(goal="x", acceptance=("a", "b"))
+    out = _drain_capture(mgr._qa_gate("r1", env, plan, "auto"))
+    assert out == ["a"]
+    # QA(a+b fail) → fix → QA(a fails: progress) → fix → QA(a fails: no
+    # progress) → stop. Three QA turns, two fix rounds.
+    assert env.qa_turn == 3
+
+
+# ---------------------------------------------------------------------------
 # Task 5 (Phase 5): _retrospective + learn toggle
 # ---------------------------------------------------------------------------
 import json as _json  # noqa: F811 (already imported; safe alias re-use)

@@ -34,3 +34,25 @@ def test_parse_qa_reads_blocked_object():
 def test_parse_qa_blocked_absent_or_malformed_is_none():
     assert parse_qa('{"acceptance": []}').blocked is None
     assert parse_qa('{"acceptance": [], "blocked": {"question": "x"}}').blocked is None  # no kind
+
+
+def test_parse_qa_unverifiable_excluded_from_failures():
+    q = parse_qa('{"acceptance":[{"criterion":"dashboard shows pr-42","passed":false,'
+                 '"unverifiable":true,"evidence":"only observable after merge"},'
+                 '{"criterion":"logout works","passed":false,"evidence":"500"}]}')
+    assert q.failures == ["logout works"]
+    assert q.unverifiable == ["dashboard shows pr-42"]
+    assert q.checked == 2
+
+
+def test_parse_qa_all_unverifiable_gives_no_failures():
+    q = parse_qa('{"acceptance":[{"criterion":"x","passed":false,"unverifiable":true}]}')
+    assert q.failures == []
+    assert q.unverifiable == ["x"]
+
+
+def test_parse_qa_unverifiable_defaults_empty():
+    q = parse_qa('{"acceptance":[{"criterion":"x","passed":true},'
+                 '{"criterion":"y","passed":false}]}')
+    assert q.unverifiable == []
+    assert q.failures == ["y"]

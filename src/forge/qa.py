@@ -7,14 +7,25 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class QaResult:
-    results: tuple = ()      # tuple of {criterion, passed, evidence} dicts
+    results: tuple = ()      # tuple of {criterion, passed, unverifiable, evidence} dicts
     summary: str = ""
     blocked: dict | None = None   # {kind, question} when the agent needs a human
 
     @property
     def failures(self) -> list:
+        """Criteria that failed in the running app. Excludes `unverifiable`
+        ones — a criterion only observable post-merge (external dashboard, real
+        PR run) is not a defect a fix turn could address, so it must never gate
+        or trigger repair rounds."""
         return [str(r.get("criterion", "")) for r in self.results
-                if isinstance(r, dict) and not r.get("passed", False)]
+                if isinstance(r, dict) and not r.get("passed", False)
+                and not r.get("unverifiable", False)]
+
+    @property
+    def unverifiable(self) -> list:
+        return [str(r.get("criterion", "")) for r in self.results
+                if isinstance(r, dict) and r.get("unverifiable", False)
+                and not r.get("passed", False)]
 
     @property
     def checked(self) -> int:

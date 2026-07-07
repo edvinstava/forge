@@ -1525,7 +1525,10 @@ class SessionManager(ReviewOps, LifecycleOps):
         """Gated acceptance QA: run _qa, then up to max_repair_iters rounds of
         {QA-fix turn → re-verify CI (_repair) → re-_qa}. RETURNS remaining
         acceptance failures ([] = all pass). If a QA fix regresses CI past its
-        repair budget, returns the CI failure names (bottom-out). No _active, no push."""
+        repair budget, returns the CI failure names (bottom-out). A fix round
+        that leaves the failure set unchanged stops the loop early — another
+        blind retry on the same criteria rarely lands, and escalation reaches a
+        human sooner. No _active, no push."""
         from forge.prompts import build_qa_fix_prompt
         failed = yield from self._qa(run_id, env, plan, model)
         it = 0
@@ -1546,7 +1549,10 @@ class SessionManager(ReviewOps, LifecycleOps):
             ci = yield from self._repair(run_id, env, self._get_verify_plan(run_id), model)
             if ci:
                 return ci                       # a QA fix broke CI → bottom-out
+            prev = failed
             failed = yield from self._qa(run_id, env, plan, model)
+            if set(failed) == set(prev):
+                break                           # no progress → escalate now
         return failed
 
     def _qa(self, run_id, env, plan, model="auto"):
@@ -1554,9 +1560,10 @@ class SessionManager(ReviewOps, LifecycleOps):
         .forge/qa.json. Injects this repo's stored credentials (if any) into the
         prompt and redacts them out of narration/tool output. Yields
         narration/tool + a `qa` event; RETURNS failing criteria ([] = all pass OR
-        no/invalid qa.json — inconclusive never gates). The `qa` event's
-        `blocked` flag / on-disk qa.json signals when a human is needed.
-        Never touches self._active; never commits."""
+        no/invalid qa.json — inconclusive never gates; criteria marked
+        `unverifiable` are surfaced on the event but never gate either). The
+        `qa` event's `blocked` flag / on-disk qa.json signals when a human is
+        needed. Never touches self._active; never commits."""
         from forge.prompts import build_qa_prompt
         from forge.creds import redact_secrets
         self._reset_qa(run_id)
@@ -1583,6 +1590,7 @@ class SessionManager(ReviewOps, LifecycleOps):
         failed = qa.failures if qa else []
         yield TurnEvent("qa", {"checked": qa.checked if qa else 0,
                                "failed": failed,
+                               "unverifiable": qa.unverifiable if qa else [],
                                "summary": qa.summary if qa else "",
                                "blocked": bool(qa and qa.blocked)})
         return failed

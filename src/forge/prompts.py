@@ -255,7 +255,11 @@ _PLAN_SCHEMA = (
     ' "assumptions": ["<assumption you are making>"],\n'
     ' "open_questions": ["<blocker you cannot resolve from the repo>"],\n'
     ' "risk": "low|medium|high"}\n'
-    "- Keep it concise and concrete. `acceptance` items must be observable.\n"
+    "- Keep it concise and concrete. `acceptance` items must be verifiable by "
+    "exercising the running app in this sandbox — each one is checked in a "
+    "browser against the live instance. NEVER write criteria only observable "
+    "after merge or deploy (external dashboards, real CI/PR runs, third-party "
+    "consoles); record such post-merge checks under `assumptions` instead.\n"
     "- `open_questions` is ONLY for blockers a human must resolve: missing "
     "credentials/secrets, contradictory requirements, or an irreversible/"
     "destructive choice. Anything you could answer yourself — by reading the "
@@ -289,6 +293,11 @@ _QA_SCHEMA = (
     "- One entry per acceptance criterion below, `criterion` copied verbatim.\n"
     "- `passed` is true ONLY if you observed the criterion satisfied in the "
     "running app; otherwise false with `evidence` describing what went wrong.\n"
+    "- If a criterion CANNOT be observed from this sandbox at all — it is only "
+    "observable after merge or deploy (an external dashboard, a real CI/PR "
+    'run, a third-party console) — add `"unverifiable": true` to its entry, '
+    "with `evidence` saying why. That reports it honestly instead of as a "
+    "failure no code change here could fix.\n"
     '- If you cannot proceed without a human (e.g. a login wall and no working '
     'credentials), set `blocked` to '
     '{"kind": "needs_credentials", "question": "<one line naming exactly what '
