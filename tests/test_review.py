@@ -46,6 +46,45 @@ def test_partition_keeps_in_diff_drops_off_diff():
     assert {c.body for c in dropped} == {"off-diff", "no-file"}
 
 
+def test_partition_snaps_near_miss_to_nearest_line():
+    # (RIGHT, 6) is off-diff; nearest anchor within ±3 is (RIGHT, 4), dist 2.
+    rev = Review("s", [Comment("foo.py", 6, "RIGHT", "near miss")])
+    valid, dropped = partition(rev, diff_line_map(DIFF))
+    assert dropped == []
+    assert (valid[0].line, valid[0].side, valid[0].body) == (4, "RIGHT", "near miss")
+
+
+def test_partition_snap_prefers_right_on_distance_tie():
+    # hand-built map: RIGHT 5 and LEFT 5 are equidistant (dist 1) from line 6.
+    line_map = {"foo.py": {("RIGHT", 5), ("LEFT", 5)}}
+    rev = Review("s", [Comment("foo.py", 6, "RIGHT", "tie")])
+    valid, _ = partition(rev, line_map)
+    assert (valid[0].line, valid[0].side) == (5, "RIGHT")
+
+
+def test_partition_snap_nearest_beats_farther():
+    line_map = {"foo.py": {("RIGHT", 4), ("RIGHT", 7)}}
+    rev = Review("s", [Comment("foo.py", 6, "RIGHT", "x")])
+    valid, _ = partition(rev, line_map)
+    assert valid[0].line == 7          # dist 1 beats dist 2
+
+
+def test_partition_drops_when_no_anchor_within_window():
+    # (RIGHT, 8): nearest anchor (RIGHT, 4) is dist 4 (> 3) → still dropped.
+    rev = Review("s", [Comment("foo.py", 8, "RIGHT", "too far"),
+                       Comment("other.py", 1, "RIGHT", "no file")])
+    valid, dropped = partition(rev, diff_line_map(DIFF))
+    assert valid == []
+    assert {c.body for c in dropped} == {"too far", "no file"}
+
+
+def test_partition_exact_anchor_still_valid_unchanged():
+    # a directly-anchorable comment is kept as-is (not re-snapped).
+    rev = Review("s", [Comment("foo.py", 3, "RIGHT", "exact")])
+    valid, dropped = partition(rev, diff_line_map(DIFF))
+    assert dropped == [] and valid[0] == Comment("foo.py", 3, "RIGHT", "exact")
+
+
 def test_build_payload_shape_and_dropped_folding():
     rev = Review("Summary text", [])
     valid = [Comment("foo.py", 3, "RIGHT", "inline note")]

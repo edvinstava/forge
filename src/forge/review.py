@@ -85,11 +85,35 @@ def diff_line_map(unified_diff: str) -> dict:
     return out
 
 
+def _snap(comment: Comment, anchors: set):
+    """Re-anchor an off-diff comment to the nearest anchorable (side, line) in
+    the same file within ±3 lines. Sort key (distance, side) prefers the nearest
+    line, then RIGHT over LEFT on ties. Returns a re-anchored Comment, or None
+    when nothing anchorable is within the window."""
+    best = None
+    for side, line in anchors:
+        dist = abs(line - comment.line)
+        if dist > 3:
+            continue
+        key = (dist, 0 if side == "RIGHT" else 1)
+        if best is None or key < best[0]:
+            best = (key, side, line)
+    if best is None:
+        return None
+    _, side, line = best
+    return Comment(comment.path, line, side, comment.body)
+
+
 def partition(review: Review, line_map: dict):
     valid, dropped = [], []
     for c in review.comments:
-        if (c.side, c.line) in line_map.get(c.path, set()):
+        anchors = line_map.get(c.path, set())
+        if (c.side, c.line) in anchors:
             valid.append(c)
+            continue
+        snapped = _snap(c, anchors)
+        if snapped is not None:
+            valid.append(snapped)
         else:
             dropped.append(c)
     return valid, dropped
