@@ -288,6 +288,9 @@ def test_worker_env_has_no_pat_and_git_execs_get_token(tmp_path):
     out = o.run("a/b", "fix", "cr_tok")
     assert out.state == "done"
     assert env.up_secrets["GH_TOKEN"] == ""
+    from forge.recipe import SUPABASE_LOCAL_SERVICE_ROLE_KEY
+    assert env.up_secrets["FORGE_SUPABASE_SERVICE_ROLE_KEY"] == \
+        SUPABASE_LOCAL_SERVICE_ROLE_KEY
     argvs = [" ".join(a) for a, _ in env.gh_execs]
     assert any("setup-git" in a for a in argvs)
     assert any("push" in a for a in argvs)

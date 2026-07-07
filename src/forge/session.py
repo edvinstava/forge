@@ -23,7 +23,8 @@ from forge.prompts import (build_task_prompt, build_self_review_prompt,
                            build_plan_prompt, build_replan_prompt,
                            build_retrospective_prompt)
 from forge import flow
-from forge.recipe import (SUPABASE_LOCAL_ANON_KEY, apply_overlay,
+from forge.recipe import (SUPABASE_LOCAL_ANON_KEY,
+                          SUPABASE_LOCAL_SERVICE_ROLE_KEY, apply_overlay,
                           apply_resource_limits, none_recipe, resolve)
 from forge.knowledge import KnowledgeStore
 from forge import envprobe
@@ -128,6 +129,8 @@ class SessionManager(ReviewOps, LifecycleOps):
         return {"CLAUDE_CODE_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
                 "GH_TOKEN": "",
                 "FORGE_SUPABASE_ANON_KEY": SUPABASE_LOCAL_ANON_KEY,
+                "FORGE_SUPABASE_SERVICE_ROLE_KEY":
+                    SUPABASE_LOCAL_SERVICE_ROLE_KEY,
                 **self.provider.secrets(self.cfg)}
 
     def _gh_env(self, run_id) -> dict:

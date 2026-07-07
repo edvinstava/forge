@@ -222,6 +222,7 @@ _FACTS = {
     "pkg_manager": "bun",
     "dev_cmd": "bun run dev",
     "test_cmds": ["bun run test", "bun run test:e2e"],
+    "env_keys": ["NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
 }
 
 
@@ -235,6 +236,16 @@ def test_render_env_block_full_has_facts_and_note():
     assert "bun run test" in b
     assert "do not start duplicate" in b.lower()
     assert "localhost" in b.lower()          # steer off assuming localhost
+
+
+def test_render_env_block_full_lists_env_key_names():
+    # The agent sees WHICH vars the web container already has (so a missing-key
+    # symptom is diagnosed as a code bug, not an environment gap) — names only.
+    from forge.prompts import render_env_block
+    b = render_env_block(_FACTS)
+    assert "SUPABASE_SERVICE_ROLE_KEY" in b
+    assert "values omitted" in b
+    assert render_env_block({**_FACTS, "env_keys": []}).count("env vars") == 0
 
 
 def test_render_env_block_empty_when_no_facts():
