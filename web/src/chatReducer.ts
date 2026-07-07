@@ -13,7 +13,7 @@ export type Segment =
   | { kind: "step"; label: string; status: "active" | "done" | "error" }
   | { kind: "verify"; pass: boolean }
   | { kind: "repair"; iter: number; failed: string[] }
-  | { kind: "qa"; pass: boolean; checked: number; failed: string[] }
+  | { kind: "qa"; pass: boolean; checked: number; failed: string[]; unverifiable: string[] }
   | { kind: "retrospective"; added: number };
 
 export interface Bubble {
@@ -52,7 +52,7 @@ export type ChatAction =
   | { type: "LIVE_STEP"; label: string }
   | { type: "LIVE_VERIFY"; pass: boolean }
   | { type: "LIVE_REPAIR"; iter: number; failed: string[] }
-  | { type: "LIVE_QA"; checked: number; failed: string[] }
+  | { type: "LIVE_QA"; checked: number; failed: string[]; unverifiable: string[] }
   | { type: "LIVE_RETRO"; added: number }
   | { type: "LIVE_MODEL"; model: string }
   | { type: "CLOSE_LIVE"; final?: Partial<Bubble>; stepStatus?: "done" | "error" }
@@ -135,7 +135,7 @@ export function reducer(state: ChatState, action: ChatAction): ChatState {
       return pushSeg(state, { kind: "repair", iter: action.iter, failed: action.failed });
 
     case "LIVE_QA":
-      return pushSeg(state, { kind: "qa", pass: action.failed.length === 0, checked: action.checked, failed: action.failed });
+      return pushSeg(state, { kind: "qa", pass: action.failed.length === 0, checked: action.checked, failed: action.failed, unverifiable: action.unverifiable });
 
     case "LIVE_RETRO":
       return pushSeg(state, { kind: "retrospective", added: action.added });
