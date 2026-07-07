@@ -1206,6 +1206,31 @@ def test_review_pass_redacts_credentials_from_stream(tmp_path, monkeypatch):
     assert all("s3cret" not in t for t in texts)          # raw secret never leaked
 
 
+def test_review_pass_redacts_credentials_from_persisted_message(tmp_path, monkeypatch):
+    mgr, store, cfg = _review_mgr(tmp_path)
+
+    class ResultLeakEnv(FakeEnv):
+        def exec_stream(self, argv, service=None, workdir="/work"):
+            import json
+            yield json.dumps({"type": "result", "subtype": "success",
+                              "is_error": False, "session_id": "s1",
+                              "result": "verified while logged in as s3cret",
+                              "total_cost_usd": 0.1, "num_turns": 1, "usage": {}})
+
+    mgr.env_factory = lambda rid, files: ResultLeakEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: "http://web:3000")
+    monkeypatch.setattr(mgr, "_qa_credentials",
+                        lambda rid: [{"role": "admin", "username": "u",
+                                      "password": "s3cret"}])
+
+    list(mgr.review("rr", "o/r#3"))
+    assistant = [m for m in store.list_messages("rr") if m["role"] == "assistant"]
+    assert assistant, "expected a persisted assistant message"
+    assert "s3cret" not in assistant[-1]["content"]     # raw secret never persisted
+    assert "••••" in assistant[-1]["content"]           # redacted marker present
+
+
 def test_review_pass_resets_stale_artifacts_at_start(tmp_path, monkeypatch):
     mgr, store, cfg = _review_mgr(tmp_path)
     mgr.env_factory = lambda rid, files: FakeEnv(rid, files)

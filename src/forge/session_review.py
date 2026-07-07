@@ -72,6 +72,7 @@ class ReviewOps:
         self._reset_artifacts(run_id)
         creds = self._qa_credentials(run_id)
         secrets = [c.get("password") for c in (creds or []) if c.get("password")]
+        red = lambda s: redact_secrets(s, secrets)
         app_url = self._app_url(run_id)
         full = build_review_prompt(ref.slug, ref.number, app_url, credentials=creds)
         chosen = self.provider.resolve_model(
@@ -86,19 +87,18 @@ class ReviewOps:
             browserview.start(self.cfg.runs_dir, run_id, env)
         try:
             result = yield from self._stream_worker(
-                run_id, env, full, chosen,
-                redact=lambda s: redact_secrets(s, secrets))
+                run_id, env, full, chosen, redact=red)
         finally:
             browserview.stop(self.cfg.runs_dir, run_id)
         if result and result.auth_error:
             yield TurnEvent("error", {"kind": "auth",
-                                      "detail": result.result_text[:300]})
+                                      "detail": red(result.result_text)[:300]})
             return
         # Persist the agent's review narration/result so the web transcript
         # mirrors turn()'s assistant message (cross-surface parity).
         if result:
             self.store.add_message(
-                run_id, "assistant", result.result_text or "(review complete)",
+                run_id, "assistant", red(result.result_text) or "(review complete)",
                 meta={"cost": result.total_cost_usd, "model": chosen})
         posted = self._post_review(run_id, ref)
         msg = (f"Review posted: {posted['review_url']}" if posted.get("ok")
