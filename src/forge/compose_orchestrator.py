@@ -11,7 +11,8 @@ from forge.health import health_poll_argv
 from forge.plan import parse_plan
 from forge.probing import build_probe
 from forge.prompts import build_fix_prompt, build_plan_prompt, build_task_prompt
-from forge.recipe import (SUPABASE_LOCAL_ANON_KEY, Probe,
+from forge.recipe import (SUPABASE_LOCAL_ANON_KEY,
+                          SUPABASE_LOCAL_SERVICE_ROLE_KEY, Probe,
                           apply_resource_limits, resolve)
 from forge.rundir import RunDir
 from forge.runspec import make_runspec
@@ -110,7 +111,9 @@ class ComposeOrchestrator:
         # repo code); forge's own git/gh execs get a token per exec (_gh_env).
         secrets = {"CLAUDE_CODE_OAUTH_TOKEN": self.cfg.oauth_token,
                    "GH_TOKEN": "",
-                   "FORGE_SUPABASE_ANON_KEY": SUPABASE_LOCAL_ANON_KEY}
+                   "FORGE_SUPABASE_ANON_KEY": SUPABASE_LOCAL_ANON_KEY,
+                   "FORGE_SUPABASE_SERVICE_ROLE_KEY":
+                       SUPABASE_LOCAL_SERVICE_ROLE_KEY}
 
         for hc in recipe.host_pre:   # e.g. supabase start (best-effort)
             r = self.host.run(hc)

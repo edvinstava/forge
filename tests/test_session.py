@@ -2840,6 +2840,18 @@ def test_worker_container_env_carries_no_github_token(tmp_path):
     assert mgr._secrets()["GH_TOKEN"] == ""
 
 
+def test_compose_up_supplies_both_local_supabase_keys(tmp_path):
+    # The web service interpolates ${FORGE_SUPABASE_ANON_KEY} and
+    # ${FORGE_SUPABASE_SERVICE_ROLE_KEY}; both fixed local-dev JWTs must be in
+    # the up env or service-role server actions fail in every spun-up app.
+    from forge.recipe import (SUPABASE_LOCAL_ANON_KEY,
+                              SUPABASE_LOCAL_SERVICE_ROLE_KEY)
+    mgr, _store = _mgr(tmp_path)
+    s = mgr._secrets()
+    assert s["FORGE_SUPABASE_ANON_KEY"] == SUPABASE_LOCAL_ANON_KEY
+    assert s["FORGE_SUPABASE_SERVICE_ROLE_KEY"] == SUPABASE_LOCAL_SERVICE_ROLE_KEY
+
+
 def test_git_execs_receive_a_per_exec_token(tmp_path):
     # forge's own git/gh execs (credential setup, push, PR create) get the
     # token injected per exec — the PAT fallback when no App is configured.

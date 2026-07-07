@@ -42,16 +42,23 @@ import yaml
 from forge import knowledge
 from forge.supaports import SUPABASE_BASE_API_PORT
 
-# The Supabase local anon key is a fixed, deterministic JWT (signed from the
-# default local JWT secret) — identical on every machine, safe to hardcode.
+# The Supabase local keys are fixed, deterministic JWTs (signed from the
+# default local JWT secret, iss=supabase-demo) — identical on every machine,
+# documented in the Supabase local-dev guide, safe to hardcode. Only real for
+# a stack started with the default `jwt_secret`, which is how forge runs it.
 SUPABASE_LOCAL_ANON_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
     "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9."
     "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
 )
-# Note: the embedded key above is the documented local-dev anon JWT. Forge also
-# resolves the live key from `supabase status -o env` at provision time when
-# available; the constant is the zero-config fallback.
+# service_role counterpart: server-only admin key. Apps gate privileged writes
+# behind `createAdminClient()`-style helpers that hard-require it, so a spin-up
+# without it renders every admin surface empty even though the app "runs".
+SUPABASE_LOCAL_SERVICE_ROLE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0."
+    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+)
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,7 @@ class Recipe:
             "pkg_manager": self.pkg_manager_used if is_js else None,
             "dev_cmd": dev_cmd,
             "test_cmds": list(self.test_cmds) if is_js else [],
+            "env_keys": self._env_keys(),
         }
 
     def _endpoints(self, app) -> list:
@@ -127,6 +135,20 @@ class Recipe:
         elif self.name == "dhis2-chap":
             out += [("DHIS2", "http://dhis2-web:8080"), ("CHAP", "http://chap:8000")]
         return [ep for ep in out if ep[1] != app]   # never repeat the app URL
+
+    def _env_keys(self) -> list:
+        """The env var NAMES (never values) already set on the web service, so
+        the agent knows e.g. SUPABASE_SERVICE_ROLE_KEY is provided and doesn't
+        misdiagnose a real bug as 'the sandbox lacks the key' (or vice versa)."""
+        if not (self.compose and self.web_service):
+            return []
+        env = self.compose.get("services", {}).get(self.web_service, {}) \
+                          .get("environment")
+        if isinstance(env, dict):
+            return list(env)
+        if isinstance(env, list):   # compose list form: "KEY=value"
+            return [e.split("=", 1)[0] for e in env if isinstance(e, str)]
+        return []
 
 
 def _scripts(package_json):
@@ -254,6 +276,15 @@ def next_supabase_recipe(workspace, worker_image, port=3000, offset=0,
                 "environment": {
                     "NEXT_PUBLIC_SUPABASE_URL": f"http://host.docker.internal:{api_port}",
                     "NEXT_PUBLIC_SUPABASE_ANON_KEY": "${FORGE_SUPABASE_ANON_KEY}",
+                    # Server-side (never NEXT_PUBLIC) vars: admin/service
+                    # clients read these, and a local `.env` supplying them is
+                    # typically gitignored — without them every service-role
+                    # server action fails ("Missing SUPABASE_SERVICE_ROLE_KEY")
+                    # while the rest of the app works, which reads as a code
+                    # bug. SUPABASE_URL stays on the direct host-gateway URL:
+                    # it is only resolved inside the container.
+                    "SUPABASE_URL": f"http://host.docker.internal:{api_port}",
+                    "SUPABASE_SERVICE_ROLE_KEY": "${FORGE_SUPABASE_SERVICE_ROLE_KEY}",
                 },
                 "entrypoint": ["sh", "-lc"],
                 "command": [web_command(pkg_manager, "dev", port)],
@@ -272,7 +303,8 @@ def next_supabase_recipe(workspace, worker_image, port=3000, offset=0,
             ["supabase", "db", "reset", "--workdir", workspace],
         ),
         host_post=(["supabase", "stop", "--workdir", workspace],),
-        notes="Supabase via local CLI on host:54321; anon key is the fixed local JWT.",
+        notes="Supabase via local CLI on host:54321; anon + service_role keys "
+              "are the fixed local JWTs.",
         pkg_manager_used=pkg_manager, script_used="dev",
         test_cmds=_test_cmds(package_json, pkg_manager),
     )

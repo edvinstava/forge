@@ -34,10 +34,24 @@ def test_next_supabase_recipe():
     json.dumps(r.compose)
 
 
+def test_next_supabase_web_gets_server_side_supabase_env():
+    # Admin/service clients read the server-only vars; the repo's own .env
+    # supplying them is gitignored, so forge must inject them or every
+    # service-role server action fails at runtime.
+    web = next_supabase_recipe("/ws", "img").compose["services"]["web"]
+    env = web["environment"]
+    assert env["SUPABASE_URL"] == "http://host.docker.internal:54321"
+    assert env["SUPABASE_SERVICE_ROLE_KEY"] == "${FORGE_SUPABASE_SERVICE_ROLE_KEY}"
+    # interpolation placeholder, never the literal key, in the written compose
+    assert "eyJ" not in env["SUPABASE_SERVICE_ROLE_KEY"]
+
+
 def test_next_supabase_offset_shifts_api_url():
     r = next_supabase_recipe("/ws", "img", offset=100)
     web = r.compose["services"]["web"]
     assert web["environment"]["NEXT_PUBLIC_SUPABASE_URL"] == \
+        "http://host.docker.internal:54421"
+    assert web["environment"]["SUPABASE_URL"] == \
         "http://host.docker.internal:54421"
     json.dumps(r.compose)
 
@@ -155,6 +169,21 @@ def test_runtime_facts_worker_only_is_minimal():
     assert f["app"] is None
     assert f["dev_cmd"] is None
     assert f["endpoints"] == []
+    assert f["env_keys"] == []
+
+
+def test_runtime_facts_env_keys_are_names_only():
+    f = next_supabase_recipe("/ws", "img").runtime_facts()
+    assert "SUPABASE_SERVICE_ROLE_KEY" in f["env_keys"]
+    assert "NEXT_PUBLIC_SUPABASE_ANON_KEY" in f["env_keys"]
+    assert "eyJ" not in json.dumps(f)   # no JWT value leaks into the facts
+
+
+def test_runtime_facts_env_keys_handles_compose_list_form():
+    from forge.recipe import Recipe
+    r = Recipe("node-web", True, web_service="web", web_port=3000, compose={
+        "services": {"web": {"environment": ["A=1", "B=x=y"]}}})
+    assert r.runtime_facts()["env_keys"] == ["A", "B"]
 
 
 def test_dhis2_seed_url():
@@ -166,6 +195,22 @@ def test_dhis2_seed_url():
 def test_anon_key_is_ascii_jwt():
     SUPABASE_LOCAL_ANON_KEY.encode("ascii")          # no stray unicode
     assert SUPABASE_LOCAL_ANON_KEY.count(".") == 2   # header.payload.sig
+
+
+def test_service_role_key_is_the_local_service_role_jwt():
+    import base64
+    from forge.recipe import SUPABASE_LOCAL_SERVICE_ROLE_KEY
+    SUPABASE_LOCAL_SERVICE_ROLE_KEY.encode("ascii")
+    assert SUPABASE_LOCAL_SERVICE_ROLE_KEY.count(".") == 2
+
+    def payload(jwt):
+        body = jwt.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+    svc, anon = payload(SUPABASE_LOCAL_SERVICE_ROLE_KEY), payload(SUPABASE_LOCAL_ANON_KEY)
+    assert svc["role"] == "service_role"
+    # same local-dev issuer/expiry as the anon key — one keypair family
+    assert (svc["iss"], svc["exp"]) == (anon["iss"], anon["exp"])
 
 
 def test_web_command_per_pkg_manager():

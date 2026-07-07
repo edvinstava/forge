@@ -92,6 +92,11 @@ def render_env_block(facts: dict | None, brief: bool = False) -> str:
         lines.append(f"- Dev command: {facts['dev_cmd']}")
     if facts.get("test_cmds"):
         lines.append("- Tests: " + " / ".join(facts["test_cmds"]))
+    if facts.get("env_keys"):
+        # Names only, never values: stops the agent from misreading a real bug
+        # as "the sandbox lacks SUPABASE_SERVICE_ROLE_KEY" (or the reverse).
+        lines.append("- App env vars already set in the web container (values "
+                     "omitted): " + ", ".join(facts["env_keys"]))
     if not lines:
         return ""
     lines.append("- Note: these services are already running; reach them at the "
