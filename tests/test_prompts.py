@@ -19,15 +19,43 @@ def test_build_review_prompt_anchors_and_includes_pr_and_app():
     p = build_review_prompt("o/r", 42, "http://web:3000")
     assert "o/r#42" in p
     assert ".forge/review.json" in p
-    assert "diff" in p.lower()                      # anchor-to-diff instruction
-    assert "http://web:3000" in p                   # exercise the running app
+    assert "diff" in p.lower()                       # anchor-to-diff instruction
+    assert "http://web:3000" in p                    # the running app URL
+    assert "127.0.0.1:9222" in p                     # shared browser (drive it live)
+    assert "live_check" in p                         # verdict object required
     assert "advisory" in p.lower() and "do not modify" in p.lower()
 
 
 def test_build_review_prompt_without_app_url():
     from forge.prompts import build_review_prompt
     p = build_review_prompt("o/r", 1, None)
-    assert "live instance" not in p.lower()         # no app line when none
+    assert "live instance" not in p.lower()          # no app line when none
+    assert "127.0.0.1:9222" not in p                 # no browser block
+    assert "skipped" in p                            # instructs live_check=skipped
+
+
+def test_build_review_prompt_includes_credentials_and_guardrail():
+    from forge.prompts import build_review_prompt
+    creds = [{"role": "admin", "username": "a@b.c", "password": "pw"}]
+    p = build_review_prompt("o/r", 2, "http://web:3000", credentials=creds)
+    assert "CREDENTIALS" in p
+    assert "role=admin" in p and "a@b.c" in p and "pw" in p
+    assert "brute" in p.lower()                      # never brute-force logins
+    assert "blocked" in p                            # login wall → live_check blocked
+
+
+def test_build_review_prompt_no_credentials_block_without_creds():
+    from forge.prompts import build_review_prompt
+    p = build_review_prompt("o/r", 2, "http://web:3000")
+    assert "CREDENTIALS (use" not in p               # none supplied → no block
+    assert "brute" in p.lower()                      # guardrail still present
+
+
+def test_review_schema_lists_all_live_check_statuses():
+    from forge.prompts import build_review_prompt
+    p = build_review_prompt("o/r", 1, None)
+    for status in ("pass", "fail", "skipped", "blocked"):
+        assert status in p
 
 
 def test_build_self_review_prompt_reviews_and_fixes():

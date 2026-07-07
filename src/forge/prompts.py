@@ -180,23 +180,47 @@ def build_fix_prompt(failures) -> str:
 _REVIEW_SCHEMA = (
     "Write your findings to `.forge/review.json` (create the `.forge/` dir) as "
     "strict JSON:\n"
-    '{"summary": "<markdown overview>", "comments": [\n'
-    '  {"path": "<repo-relative path>", "line": <int>, "side": "RIGHT", '
-    '"body": "<one finding>"}\n'
-    "]}\n"
-    "- `line` MUST be a line that appears in THIS PR's diff (an added/context "
-    "line on side RIGHT, or a removed/context line on side LEFT). Do not comment "
-    "on lines outside the diff — put any such observation in `summary` instead.\n"
+    '{"summary": "<short markdown overview>",\n'
+    ' "live_check": {"status": "pass|fail|skipped|blocked", '
+    '"tested": ["<flow you exercised>"], '
+    '"notes": "<what happened / why skipped or blocked>"},\n'
+    ' "comments": [{"path": "<repo-relative path>", "line": <int>, '
+    '"side": "RIGHT", "body": "<one finding>"}]}\n'
+    "- INLINE-FIRST: every finding that names a specific file/line MUST be a "
+    "`comments[]` entry anchored to a line in THIS PR's diff (an added/context "
+    "line on side RIGHT, or a removed/context line on side LEFT). Do NOT restate "
+    "those findings in `summary`.\n"
+    "- `summary` is a SHORT overview only — what you verified and your overall "
+    "assessment — not a dump of the inline findings.\n"
+    "- `live_check` reports the browser check described above.\n"
     "- High-signal only: correctness/security bugs first, then "
     "reuse/simplification/efficiency. Skip nits and praise.\n"
 )
 
 
-def build_review_prompt(slug: str, number: int, app_url: str | None) -> str:
-    live = ""
+def build_review_prompt(slug: str, number: int, app_url: str | None,
+                        credentials=None) -> str:
     if app_url:
-        live = (f"\nA live instance of this PR's app is running at {app_url}; "
-                "exercise it where it helps you judge the change.\n")
+        live = (
+            f"\nLIVE CHECK — a live instance of this PR's app is running at "
+            f"{app_url}, and your teammate can watch you drive it. {_SHARED_BROWSER}\n"
+            "Derive what this PR should change in the running app from "
+            "`.forge/pr.diff` and the PR description, exercise exactly that in the "
+            "browser, and record the result in `live_check`: status `pass` ONLY if "
+            "you observed the changed behavior working, `fail` (with specifics in "
+            "`notes`) if it is broken." + _cred_block(credentials) + "\n"
+            "Never guess, brute-force, or try common passwords at a login wall. If "
+            "you have no working credentials for a role a check needs, set "
+            '`live_check.status` to "blocked" naming the exact role required, and '
+            "continue with the static (diff-based) review.\n"
+            "Screenshots are optional and best-effort: you MAY save PNGs under "
+            "`.forge/artifacts/` described in `.forge/artifacts/manifest.json` "
+            '({"artifacts": [{"path": "after.png", "kind": "after", '
+            '"caption": "…"}]}). Never let capture fail the review.\n')
+    else:
+        live = ("\nNo running app is available for this PR: set "
+                '`live_check.status` to "skipped" with a one-line reason in '
+                "`notes`, and review from the diff and code only.\n")
     return (
         "You are a meticulous senior code reviewer. Review the pull request "
         f"{slug}#{number} in this checked-out repository. The full PR diff is "
@@ -272,18 +296,24 @@ _QA_SCHEMA = (
 )
 
 
+def _cred_block(credentials) -> str:
+    """Render stored browser credentials for a prompt (shared by QA and review).
+    Empty string when none — callers still emit the anti-brute-force guardrail."""
+    if not credentials:
+        return ""
+    rows = "\n".join(
+        "- " + " ".join(
+            p for p in (f"role={c.get('role')}" if c.get("role") else "",
+                        f"username={c.get('username')}",
+                        f"password={c.get('password')}") if p)
+        for c in credentials)
+    return ("\n\nCREDENTIALS (use the entry whose role matches the "
+            "criterion, e.g. admin vs user):\n" + rows)
+
+
 def build_qa_prompt(acceptance, app_url, credentials=None, lessons=()):
     crits = "\n".join(f"- {c}" for c in acceptance)
-    cred_block = ""
-    if credentials:
-        rows = "\n".join(
-            "- " + " ".join(
-                p for p in (f"role={c.get('role')}" if c.get("role") else "",
-                            f"username={c.get('username')}",
-                            f"password={c.get('password')}") if p)
-            for c in credentials)
-        cred_block = ("\n\nCREDENTIALS (use the entry whose role matches the "
-                      "criterion, e.g. admin vs user):\n" + rows)
+    cred_block = _cred_block(credentials)
     guardrail = (
         "\n\nIMPORTANT: You are given NO credentials unless listed under "
         "CREDENTIALS above. If you reach a login/authentication screen and have "
