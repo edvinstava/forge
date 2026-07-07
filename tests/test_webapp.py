@@ -610,3 +610,25 @@ def test_browser_stream_serves_mjpeg_parts(tmp_path, monkeypatch):
     assert res.headers["content-type"].startswith("multipart/x-mixed-replace")
     assert res.headers["cache-control"] == "no-store"
     assert b"jpegbytes" in res.content
+
+
+def test_files_404_for_unknown_session(tmp_path):
+    client, _, _ = _client(tmp_path)
+    assert client.get("/api/sessions/nope/files").status_code == 404
+    assert client.get("/api/sessions/nope/file?path=a.ts").status_code == 404
+
+
+def test_files_empty_for_session_without_workspace(tmp_path):
+    client, store, _ = _client(tmp_path)
+    store.create_run("r1", "o/r", "", "forge/x")
+    assert client.get("/api/sessions/r1/files").json() == {
+        "files": [], "truncated": False}
+
+
+def test_file_rejects_traversal_with_404(tmp_path):
+    client, store, _ = _client(tmp_path)
+    store.create_run("r1", "o/r", "", "forge/x")
+    assert client.get("/api/sessions/r1/file",
+                      params={"path": "../../etc/passwd"}).status_code == 404
+    assert client.get("/api/sessions/r1/file",
+                      params={"path": ""}).status_code == 404

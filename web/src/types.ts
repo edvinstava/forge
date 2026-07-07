@@ -141,6 +141,35 @@ export interface VerifyResult {
   model: string | null;
 }
 
+/** One workspace file from GET /api/sessions/:id/files. `status` is the git
+ * working-tree state; "clean" = tracked and unchanged. */
+export type FileStatus =
+  | "clean" | "modified" | "added" | "deleted" | "renamed" | "untracked";
+
+export interface WorkspaceFile {
+  path: string;
+  status: FileStatus;
+}
+
+export interface FilesListing {
+  files: WorkspaceFile[];
+  truncated: boolean;
+}
+
+/** GET /api/sessions/:id/file?path= — content is capped server-side
+ * (truncated flag) and empty for binary files; diff is the file's uncommitted
+ * change (untracked files get an all-additions pseudo-diff). */
+export interface FileDetail {
+  path: string;
+  status: FileStatus;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+  missing: boolean;
+  content: string;
+  diff: string;
+}
+
 /** Response from POST /api/sessions/:id/pr (open_pr). */
 export interface PrResult {
   ok?: boolean;

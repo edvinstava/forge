@@ -22,18 +22,35 @@ describe("resolvePane", () => {
     expect(resolvePane("agent", false)).toBe("app");
     expect(resolvePane("agent", true)).toBe("agent");
   });
+
+  it("auto shows the files pane while a turn edits with no browser live", () => {
+    expect(resolvePane("auto", false, true)).toBe("files");
+    // A live browser is the closer view of the agent — it still wins.
+    expect(resolvePane("auto", true, true)).toBe("agent");
+    // Turn over (or no edits yet): back to the app.
+    expect(resolvePane("auto", false, false)).toBe("app");
+  });
+
+  it("a files pin sticks regardless of stream or edit activity", () => {
+    expect(resolvePane("files", true, false)).toBe("files");
+    expect(resolvePane("files", false, true)).toBe("files");
+    expect(resolvePane("files", false, false)).toBe("files");
+  });
 });
 
 describe("nextPin", () => {
   it("clicking what auto already shows stays in follow mode", () => {
     expect(nextPin("auto", true, "agent")).toBe("auto");
     expect(nextPin("auto", false, "app")).toBe("auto");
+    expect(nextPin("auto", false, "files", true)).toBe("auto");
   });
 
   it("clicking the other pane pins it", () => {
     expect(nextPin("auto", true, "app")).toBe("app");
     expect(nextPin("app", true, "agent")).toBe("agent");
     expect(nextPin("agent", true, "app")).toBe("app");
+    expect(nextPin("auto", false, "files", false)).toBe("files");
+    expect(nextPin("files", false, "app", true)).toBe("app");
   });
 });
 

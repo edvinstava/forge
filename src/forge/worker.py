@@ -51,7 +51,34 @@ class StreamEvent:
     kind: str                 # 'narration' | 'tool' | 'result' | 'other'
     text: str = ""
     target: str = ""          # tool's primary argument (file, command, pattern)
+    path: str = ""            # workspace-relative path for file-touching tools
     result: "WorkerResult | None" = None
+
+
+def workspace_relpath(path: str) -> str:
+    """Normalize an agent-reported file path to workspace-relative form (the
+    agent's cwd is /work, the bind-mounted workspace). Absolute paths outside
+    /work aren't repo files — return '' so the UI never follows them."""
+    p = (path or "").strip()
+    if not p:
+        return ""
+    if p.startswith("/"):
+        if not p.startswith("/work/"):
+            return ""
+        p = p[len("/work/"):]
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _tool_path(name: str, inp: dict) -> str:
+    """Workspace-relative path a file-touching tool acts on ('' otherwise) —
+    lets the live files pane follow the agent's edits by full path, where
+    `target` stays the short basename label the activity stream renders."""
+    inp = inp or {}
+    if name in ("Read", "Edit", "Write", "NotebookEdit", "NotebookRead"):
+        return workspace_relpath(inp.get("file_path") or inp.get("notebook_path") or "")
+    return ""
 
 
 def _tool_target(name: str, inp: dict) -> str:
@@ -92,5 +119,7 @@ def parse_stream_line(line: str) -> "StreamEvent | None":
                 return StreamEvent("narration", block.get("text", ""))
             if block.get("type") == "tool_use":
                 name = block.get("name", "tool")
-                return StreamEvent("tool", name, target=_tool_target(name, block.get("input")))
+                return StreamEvent("tool", name,
+                                   target=_tool_target(name, block.get("input")),
+                                   path=_tool_path(name, block.get("input")))
     return StreamEvent("other")

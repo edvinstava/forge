@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AppFrame } from "./AppFrame";
 import { AgentView } from "./AgentView";
+import { FilesView } from "./FilesView";
 import { Chat } from "./Chat";
 import { DiffView } from "./DiffView";
 import { VerifyView } from "./VerifyView";
@@ -8,7 +9,8 @@ import { getConfig, getSession, getBrowserStatus } from "./api";
 import { localPreviewUrl } from "./webUrl";
 import { useSplitPane } from "./splitPane";
 import { resolvePane, nextPin, nextEpoch, cookieSafeWorkspaceUrl } from "./agentBrowser";
-import type { PanePin } from "./agentBrowser";
+import type { PanePin, Pane } from "./agentBrowser";
+import { touchAction, pushTouch, type FileTouch } from "./filesModel";
 import type { ProxyConfig, BrowserStatus } from "./types";
 
 type Tab = "chat" | "diff" | "verify";
@@ -20,10 +22,12 @@ const IDLE_BROWSER: BrowserStatus = { active: false, ts: 0, url: "", title: "" }
 /**
  * Focused, deep-linkable view (#live=<run_id>): the running app on the left and
  * the agent chat on the right, split by a draggable gutter (default ~75/25,
- * persisted). Prompt the agent and watch the app update live. While a QA turn
- * screencasts the agent's browser, the left pane follows it (AgentView) so you
- * can watch the agent log in and click through the app; a pin toggle forces
- * either pane. Reuses AppFrame, Chat, and the diff/verify panels.
+ * persisted). Prompt the agent and watch the app update live. The left pane
+ * follows the agent: while a turn screencasts the agent's browser it shows
+ * that (AgentView); while a turn is editing files with no browser up it shows
+ * the live files view (FilesView) so you can watch edits land; idle, it shows
+ * the app. A pin toggle forces any pane. Reuses AppFrame, Chat, and the
+ * diff/verify panels.
  */
 export function Workspace({ runId }: { runId: string }) {
   const [webUrl, setWebUrl] = useState<string | null>(null);
@@ -36,6 +40,12 @@ export function Workspace({ runId }: { runId: string }) {
   // opens a fresh MJPEG connection per screencast (the old stream has ended).
   const [epoch, setEpoch] = useState(0);
   const prevActive = useRef(false);
+  // File-touching tool calls streamed by the current turn (via Chat) — feeds
+  // the files pane; editsLive keeps auto mode on it until the turn completes.
+  const [touches, setTouches] = useState<FileTouch[]>([]);
+  const [editsLive, setEditsLive] = useState(false);
+  // Files pane stays mounted once visited so tree state survives pane flips.
+  const [filesMounted, setFilesMounted] = useState(false);
   const { splitPct, shellRef, gutterHandlers } = useSplitPane();
 
   useEffect(() => {
@@ -88,10 +98,23 @@ export function Workspace({ runId }: { runId: string }) {
   const handleUrl = useCallback((url: string) => setWebUrl(url), []);
   const handleTurnDone = useCallback(() => {
     setReloadSignal((n) => n + 1);
+    setEditsLive(false);
     refreshUrl();
   }, [refreshUrl]);
 
-  const pane = resolvePane(pin, browser.active);
+  // Tool events with a workspace path (Edit src/x.ts, Read …) — whichever
+  // surface drives the turn, Chat's feed relays them here.
+  const handleFile = useCallback((name: string, path: string) => {
+    const action = touchAction(name);
+    if (!action || !path) return;
+    setTouches((ts) => pushTouch(ts, { path, action, ts: Date.now() }));
+    if (action === "edit") setEditsLive(true);
+  }, []);
+
+  const pane = resolvePane(pin, browser.active, editsLive);
+  useEffect(() => {
+    if (pane === "files") setFilesMounted(true);
+  }, [pane]);
 
   const TABS: { id: Tab; label: string }[] = [
     { id: "chat", label: "chat" },
@@ -106,8 +129,9 @@ export function Workspace({ runId }: { runId: string }) {
       style={{ ["--split" as string]: splitPct }}
     >
       <section className="workspace-app">
-        {/* AppFrame stays mounted while the agent view overlays it, so taking
-            the pane back doesn't reload the app iframe (and lose its state). */}
+        {/* AppFrame (and, once visited, FilesView) stay mounted while another
+            pane overlays them, so taking the pane back doesn't reload the app
+            iframe or drop the file tree's state. */}
         <div
           style={{
             display: pane === "app" ? "flex" : "none",
@@ -118,21 +142,37 @@ export function Workspace({ runId }: { runId: string }) {
         >
           <AppFrame webUrl={webUrl} localUrl={localUrl} reloadSignal={reloadSignal} />
         </div>
+        {filesMounted && (
+          <div
+            style={{
+              display: pane === "files" ? "flex" : "none",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
+            <FilesView sessionId={runId} touches={touches} reloadSignal={reloadSignal} />
+          </div>
+        )}
         {pane === "agent" && <AgentView sessionId={runId} status={browser} epoch={epoch} />}
-        {browser.active && (
-          <div className="pane-toggle" role="tablist" aria-label="Left pane source">
-            {(["app", "agent"] as const).map((p) => (
+        <div className="pane-toggle" role="tablist" aria-label="Left pane source">
+          {(["app", "files", "agent"] as Pane[])
+            .filter((p) => p !== "agent" || browser.active)
+            .map((p) => (
               <button
                 key={p}
                 className={`pane-toggle-btn${pane === p ? " is-active" : ""}`}
-                onClick={() => setPin(nextPin(pin, browser.active, p))}
-                title={p === "agent" ? "Watch the agent's browser live" : "Show the running app"}
+                onClick={() => setPin(nextPin(pin, browser.active, p, editsLive))}
+                title={
+                  p === "agent" ? "Watch the agent's browser live"
+                    : p === "files" ? "Watch the agent edit workspace files"
+                    : "Show the running app"
+                }
               >
-                {p === "agent" ? "● agent" : "app"}
+                {p === "agent" ? "● agent" : p === "files" ? "⦿ files" : "app"}
               </button>
             ))}
-          </div>
-        )}
+        </div>
       </section>
       <div
         className="workspace-gutter"
@@ -166,7 +206,7 @@ export function Workspace({ runId }: { runId: string }) {
               flexDirection: "column",
             }}
           >
-            <Chat key={runId} sessionId={runId} onUrl={handleUrl} onTurnDone={handleTurnDone} />
+            <Chat key={runId} sessionId={runId} onUrl={handleUrl} onTurnDone={handleTurnDone} onFile={handleFile} />
           </div>
           {tab === "diff" && <DiffView activeId={runId} />}
           {tab === "verify" && <VerifyView activeId={runId} />}

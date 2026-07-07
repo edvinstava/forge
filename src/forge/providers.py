@@ -17,7 +17,7 @@ from pathlib import Path
 from forge import commands as cmd
 from forge import models as claude_models
 from forge.worker import WorkerResult, parse_stream_line, parse_worker_result
-from forge.worker import StreamEvent
+from forge.worker import StreamEvent, workspace_relpath
 
 
 class ClaudeProvider:
@@ -197,8 +197,9 @@ class _CodexStreamParser:
                 changes = item.get("changes") or []
                 path = (changes[0] or {}).get("path", "") if changes else ""
                 target = path.rsplit("/", 1)[-1]
-            else:
-                target = str(item.get(field) or "")[:72]
+                return StreamEvent("tool", name, target=target,
+                                   path=workspace_relpath(path))
+            target = str(item.get(field) or "")[:72]
             return StreamEvent("tool", name, target=target)
         return StreamEvent("other")
 
