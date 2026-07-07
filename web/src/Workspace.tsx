@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { AppFrame } from "./AppFrame";
 import { AgentView } from "./AgentView";
 import { Chat } from "./Chat";
@@ -7,13 +7,13 @@ import { VerifyView } from "./VerifyView";
 import { getConfig, getSession, getBrowserStatus } from "./api";
 import { localPreviewUrl } from "./webUrl";
 import { useSplitPane } from "./splitPane";
-import { resolvePane, nextPin, cookieSafeWorkspaceUrl } from "./agentBrowser";
+import { resolvePane, nextPin, nextEpoch, cookieSafeWorkspaceUrl } from "./agentBrowser";
 import type { PanePin } from "./agentBrowser";
 import type { ProxyConfig, BrowserStatus } from "./types";
 
 type Tab = "chat" | "diff" | "verify";
 
-const BROWSER_POLL_MS = 1500;
+const BROWSER_POLL_MS = 1000;
 
 const IDLE_BROWSER: BrowserStatus = { active: false, ts: 0, url: "", title: "" };
 
@@ -32,6 +32,10 @@ export function Workspace({ runId }: { runId: string }) {
   const [tab, setTab] = useState<Tab>("chat");
   const [browser, setBrowser] = useState<BrowserStatus>(IDLE_BROWSER);
   const [pin, setPin] = useState<PanePin>("auto");
+  // Screencast generation: bumps on each inactive→active edge so AgentView
+  // opens a fresh MJPEG connection per screencast (the old stream has ended).
+  const [epoch, setEpoch] = useState(0);
+  const prevActive = useRef(false);
   const { splitPct, shellRef, gutterHandlers } = useSplitPane();
 
   useEffect(() => {
@@ -57,16 +61,22 @@ export function Workspace({ runId }: { runId: string }) {
   }, [runId]);
   useEffect(() => { refreshUrl(); }, [refreshUrl]);
 
-  // Agent-browser heartbeat: cheap local poll (frames bypass the SSE bus). A
-  // new frame bumps `ts`, which re-renders the <img> in AgentView; hidden tabs
-  // skip the fetch entirely.
+  // Agent-browser status poll: gates the pane switch and feeds url/title.
+  // Frames themselves arrive over the MJPEG stream in AgentView (this poll is
+  // only their fallback cache-buster); hidden tabs skip the fetch entirely.
   useEffect(() => {
     let stopped = false;
+    const apply = (s: BrowserStatus) => {
+      if (stopped) return;
+      setEpoch((e) => nextEpoch(prevActive.current, s.active, e));
+      prevActive.current = s.active;
+      setBrowser(s);
+    };
     const tick = () => {
       if (document.hidden) return;
       getBrowserStatus(runId)
-        .then((s) => { if (!stopped) setBrowser(s); })
-        .catch(() => { if (!stopped) setBrowser(IDLE_BROWSER); });
+        .then(apply)
+        .catch(() => apply(IDLE_BROWSER));
     };
     tick();
     const iv = setInterval(tick, BROWSER_POLL_MS);
@@ -108,7 +118,7 @@ export function Workspace({ runId }: { runId: string }) {
         >
           <AppFrame webUrl={webUrl} localUrl={localUrl} reloadSignal={reloadSignal} />
         </div>
-        {pane === "agent" && <AgentView sessionId={runId} status={browser} />}
+        {pane === "agent" && <AgentView sessionId={runId} status={browser} epoch={epoch} />}
         {browser.active && (
           <div className="pane-toggle" role="tablist" aria-label="Left pane source">
             {(["app", "agent"] as const).map((p) => (

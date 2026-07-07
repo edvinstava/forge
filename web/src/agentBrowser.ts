@@ -28,9 +28,24 @@ export function nextPin(pin: PanePin, active: boolean, clicked: Pane): PanePin {
 }
 
 /** Frame URL with the status ts as cache-buster: the <img> src only changes —
- *  and thus refetches — when a new frame actually landed. */
+ *  and thus refetches — when a new frame actually landed. Poll-mode fallback;
+ *  the MJPEG stream below is the fast path. */
 export function browserFrameUrl(sessionId: string, ts: number): string {
   return `/api/sessions/${sessionId}/browser/frame?t=${ts}`;
+}
+
+/** MJPEG stream URL: one long-lived request the <img> renders natively, each
+ *  frame pushed the moment the screencaster writes it (~10 fps, sub-second
+ *  latency). `epoch` counts screencast starts — a bump forces a fresh
+ *  connection, since the previous stream ended with the last turn. */
+export function browserStreamUrl(sessionId: string, epoch: number): string {
+  return `/api/sessions/${sessionId}/browser/stream?e=${epoch}`;
+}
+
+/** Epoch advances only on the inactive→active edge (a new screencast started);
+ *  staying active or going inactive keeps the current stream connection. */
+export function nextEpoch(prevActive: boolean, active: boolean, epoch: number): number {
+  return active && !prevActive ? epoch + 1 : epoch;
 }
 
 /**

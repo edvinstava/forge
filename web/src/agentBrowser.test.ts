@@ -3,6 +3,8 @@ import {
   resolvePane,
   nextPin,
   browserFrameUrl,
+  browserStreamUrl,
+  nextEpoch,
   cookieSafeWorkspaceUrl,
 } from "./agentBrowser";
 
@@ -38,6 +40,27 @@ describe("nextPin", () => {
 describe("browserFrameUrl", () => {
   it("busts the cache with the frame ts", () => {
     expect(browserFrameUrl("r1", 1234)).toBe("/api/sessions/r1/browser/frame?t=1234");
+  });
+});
+
+describe("browserStreamUrl", () => {
+  it("keys the MJPEG connection on the screencast epoch", () => {
+    expect(browserStreamUrl("r1", 2)).toBe("/api/sessions/r1/browser/stream?e=2");
+  });
+});
+
+describe("nextEpoch", () => {
+  it("bumps only when a screencast starts (inactive→active edge)", () => {
+    expect(nextEpoch(false, true, 0)).toBe(1);
+  });
+
+  it("holds the connection while the stream stays active", () => {
+    expect(nextEpoch(true, true, 1)).toBe(1);
+  });
+
+  it("does not bump on end or while idle — no reconnect to a dead stream", () => {
+    expect(nextEpoch(true, false, 1)).toBe(1);
+    expect(nextEpoch(false, false, 1)).toBe(1);
   });
 });
 

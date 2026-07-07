@@ -114,3 +114,32 @@ which is the surface built for actually *using* the app.
   wiring test asserting start→stream→stop ordering and stop-on-crash.
 - Frontend: vitest for pane gating + frame URL helpers.
 - Pre-merge: full `uv run pytest`, `npm test`, `vite build` (dist is tracked).
+
+## Addendum 2026-07-07 — fast path (push screencast + MJPEG)
+
+The v1 pipeline was poll-on-poll: a 700 ms `page.screenshot()` tick × a
+1.5 s UI status poll ≈ 0.7 fps with 1.5–2.5 s lag. Both ends replaced:
+
+- **Production:** the screencaster now uses CDP `Page.startScreencast` via
+  `context.newCDPSession(page)` — Chromium pushes a JPEG per paint. Every
+  frame is acked immediately (no backpressure stall); disk writes are
+  throttled to ~12 fps (`MIN_FRAME_MS`). Where screencast setup fails the old
+  explicit-screenshot loop remains as fallback. Spike in the forge-worker
+  image: ~30 fps delivered while a page is driven, ~2 frames/s static.
+- **Liveness:** a static page emits *no* frames, so `active` can no longer key
+  off frame mtime alone — the control loop (250 ms) heartbeats `meta.json`
+  (`beat`, epoch ms) and `status()` treats fresh-beat-or-fresh-frame as
+  active. Without this the workspace pane flaps back to the app whenever the
+  agent pauses to think. Live-validated: beat gap ≤ 0.25 s during an 8 s
+  static phase, frames correctly silent.
+- **Delivery:** `GET /api/sessions/{id}/browser/stream` serves
+  `multipart/x-mixed-replace` (MJPEG): `stream_frames()` watches `frame.jpg`
+  every 80 ms and pushes each new frame down one long-lived request that the
+  `<img>` renders natively. Ends cleanly when the stream goes stale, after a
+  3 s grace if no frame ever appears, or at the screencaster's 2 h cap.
+  Validated against real uvicorn: first part in 30 ms, no buffering.
+- **Frontend:** AgentView tries the stream first and drops to the old
+  poll-and-swap `/browser/frame` on `<img>` error; a screencast *epoch*
+  (bumped on each inactive→active edge of the status poll, now 1 s) forces a
+  fresh MJPEG connection per turn. Net effect: ~10 fps with sub-second
+  latency, degrading to v1 behavior when anything in the fast path fails.

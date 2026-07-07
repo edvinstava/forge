@@ -587,3 +587,26 @@ def test_browser_status_and_frame_served_from_workspace(tmp_path):
     assert res.headers["content-type"] == "image/jpeg"
     assert res.headers["cache-control"] == "no-store"   # always the newest frame
     assert res.content == b"\xff\xd8fakejpeg"
+
+
+def test_browser_stream_404_for_unknown_run(tmp_path):
+    client, _, _ = _client(tmp_path)
+    assert client.get("/api/sessions/nope/browser/stream").status_code == 404
+
+
+def test_browser_stream_serves_mjpeg_parts(tmp_path, monkeypatch):
+    # The route wires browserview.stream_frames into an MJPEG response; the
+    # generator's own timing/termination is unit-tested in test_browserview.
+    from forge import browserview
+    client, store, _ = _client(tmp_path)
+    store.create_run("r1", "o/r", "", "forge/x")
+
+    async def canned(runs_dir, run_id, **kw):
+        yield b"--forgeframe\r\nContent-Type: image/jpeg\r\n\r\njpegbytes\r\n"
+
+    monkeypatch.setattr(browserview, "stream_frames", canned)
+    res = client.get("/api/sessions/r1/browser/stream")
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("multipart/x-mixed-replace")
+    assert res.headers["cache-control"] == "no-store"
+    assert b"jpegbytes" in res.content

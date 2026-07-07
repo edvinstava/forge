@@ -167,6 +167,20 @@ def create_app(config, store, manager) -> FastAPI:
         return FileResponse(p, media_type="image/jpeg",
                             headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/sessions/{run_id}/browser/stream")
+    async def browser_stream(run_id: str):
+        """MJPEG push: one long-lived <img> request instead of poll-and-swap —
+        frames reach the workspace a file-poll tick after the screencaster
+        writes them. /frame stays as the poll fallback."""
+        if not store.get_run(run_id):
+            raise HTTPException(404, "no such session")
+        from forge import browserview
+        boundary = browserview.STREAM_BOUNDARY.decode()
+        return StreamingResponse(
+            browserview.stream_frames(config.runs_dir, run_id),
+            media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+            headers={"Cache-Control": "no-store"})
+
     @app.post("/api/sessions")
     async def start_session(req: Request):
         body = await req.json()
