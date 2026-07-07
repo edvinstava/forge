@@ -57,6 +57,8 @@ class ReviewOps:
         yield from self._review_pass(run_id, ref, model)
 
     def _review_pass(self, run_id, ref, model):
+        from forge import browserview
+        from forge.creds import redact_secrets
         env = self._env_for(run_id)
         # Pre-fetch the PR diff HOST-side and drop it into the workspace: the
         # review agent runs on untrusted PR code, so the container gets no
@@ -65,12 +67,29 @@ class ReviewOps:
         diff = self.host.run(cmd.pr_diff_cmd(ref.slug, ref.number),
                              env={"GH_TOKEN": self.cfg.gh_token}).stdout
         self.host.write_file(str(ws / ".forge" / "pr.diff"), diff or "")
-        full = build_review_prompt(ref.slug, ref.number, self._app_url(run_id))
+        # Fresh artifact set for this review; stored creds injected + redacted,
+        # exactly like the QA turn (session._qa).
+        self._reset_artifacts(run_id)
+        creds = self._qa_credentials(run_id)
+        secrets = [c.get("password") for c in (creds or []) if c.get("password")]
+        app_url = self._app_url(run_id)
+        full = build_review_prompt(ref.slug, ref.number, app_url, credentials=creds)
         chosen = self.provider.resolve_model(
             model, "review for correctness bugs and security")
         yield TurnEvent("model", {"choice": model, "resolved": chosen})
         yield TurnEvent("phase", {"name": "agent", "label": "Reviewing"})
-        result = yield from self._stream_worker(run_id, env, full, chosen)
+        # Live agent-browser view: start the shared CDP Chromium + screencaster
+        # only when there is an app to drive (same guard as turn()); stop is
+        # always attempted. Both ends best-effort — a browser failure never
+        # fails the review.
+        if app_url:
+            browserview.start(self.cfg.runs_dir, run_id, env)
+        try:
+            result = yield from self._stream_worker(
+                run_id, env, full, chosen,
+                redact=lambda s: redact_secrets(s, secrets))
+        finally:
+            browserview.stop(self.cfg.runs_dir, run_id)
         if result and result.auth_error:
             yield TurnEvent("error", {"kind": "auth",
                                       "detail": result.result_text[:300]})

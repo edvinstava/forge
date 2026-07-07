@@ -17,6 +17,11 @@ def _drain_capture(gen, events=None):
         return e.value
 
 
+def _prompt_of(argv):
+    """The worker prompt element from a captured stream argv (after -p)."""
+    return argv[argv.index("-p") + 1]
+
+
 class FakeEnv:
     def __init__(self, run_id, files):
         self.run_id = run_id
@@ -1104,6 +1109,116 @@ def test_review_posts_and_validates_inline_comments(tmp_path):
     assert review_ev.data["dropped"] == 1       # off-diff folded into summary
     assert review_ev.data["degraded"] is True   # no App configured → user token
     assert store.get_run(rid)["pr_url"] == "https://github.com/o/r/pull/3#x"
+
+
+def _seed_review_ws(cfg, rid, review_json):
+    ws = cfg.runs_dir / rid / "workspace" / ".forge"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "review.json").write_text(review_json)
+    return ws
+
+
+def test_review_pass_uses_browser_and_creds_when_app_url(tmp_path, monkeypatch):
+    from forge import browserview
+    mgr, store, cfg = _review_mgr(tmp_path)
+    mgr.env_factory = lambda rid, files: CapturingEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: "http://web:3000")
+    monkeypatch.setattr(mgr, "_qa_credentials",
+                        lambda rid: [{"role": "admin", "username": "u@x.io",
+                                      "password": "s3cret"}])
+    started, stopped = [], []
+    monkeypatch.setattr(browserview, "start",
+                        lambda rd, rid, env, service="forge": started.append(rid))
+    monkeypatch.setattr(browserview, "stop", lambda rd, rid: stopped.append(rid))
+
+    list(mgr.review("rr", "o/r#3"))
+
+    assert started == ["rr"] and stopped == ["rr"]        # bracketed
+    prompt = _prompt_of(CapturingEnv.last_stream_argv)
+    assert "127.0.0.1:9222" in prompt                     # shared browser block
+    assert "s3cret" in prompt                             # creds injected
+
+
+def test_review_pass_no_browser_start_without_app_url(tmp_path, monkeypatch):
+    from forge import browserview
+    mgr, store, cfg = _review_mgr(tmp_path)
+    mgr.env_factory = lambda rid, files: CapturingEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: None)
+    started, stopped = [], []
+    monkeypatch.setattr(browserview, "start",
+                        lambda rd, rid, env, service="forge": started.append(rid))
+    monkeypatch.setattr(browserview, "stop", lambda rd, rid: stopped.append(rid))
+
+    list(mgr.review("rr", "o/r#3"))
+
+    assert started == []                                  # no app → no stream
+    assert stopped == ["rr"]                              # stop still called (finally)
+    assert "127.0.0.1:9222" not in _prompt_of(CapturingEnv.last_stream_argv)
+
+
+def test_review_pass_stops_browser_on_worker_error(tmp_path, monkeypatch):
+    import pytest
+    from forge import browserview
+    mgr, store, cfg = _review_mgr(tmp_path)
+
+    class BoomEnv(FakeEnv):
+        def exec_stream(self, argv, service=None, workdir="/work"):
+            raise RuntimeError("worker died")
+            yield  # pragma: no cover  (make it a generator)
+
+    mgr.env_factory = lambda rid, files: BoomEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: "http://web:3000")
+    stopped = []
+    monkeypatch.setattr(browserview, "start", lambda *a, **k: None)
+    monkeypatch.setattr(browserview, "stop", lambda rd, rid: stopped.append(rid))
+
+    with pytest.raises(RuntimeError):
+        list(mgr.review("rr", "o/r#3"))
+    assert stopped == ["rr"]                              # finally ran
+
+
+def test_review_pass_redacts_credentials_from_stream(tmp_path, monkeypatch):
+    mgr, store, cfg = _review_mgr(tmp_path)
+
+    class LeakyEnv(FakeEnv):
+        def exec_stream(self, argv, service=None, workdir="/work"):
+            import json
+            yield json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "logging in with s3cret"}]}})
+            yield json.dumps({"type": "result", "subtype": "success",
+                              "is_error": False, "session_id": "s1",
+                              "result": "done", "total_cost_usd": 0.1,
+                              "num_turns": 1, "usage": {}})
+
+    mgr.env_factory = lambda rid, files: LeakyEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: "http://web:3000")
+    monkeypatch.setattr(mgr, "_qa_credentials",
+                        lambda rid: [{"role": "admin", "username": "u",
+                                      "password": "s3cret"}])
+
+    evs = list(mgr.review("rr", "o/r#3"))
+    texts = [e.data.get("text", "") for e in evs if e.kind == "narration"]
+    assert any("••••" in t for t in texts)               # redacted
+    assert all("s3cret" not in t for t in texts)          # raw secret never leaked
+
+
+def test_review_pass_resets_stale_artifacts_at_start(tmp_path, monkeypatch):
+    mgr, store, cfg = _review_mgr(tmp_path)
+    mgr.env_factory = lambda rid, files: FakeEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    # a prior turn's capture that must not survive into this review
+    arts = cfg.runs_dir / "rr" / "workspace" / ".forge" / "artifacts"
+    arts.mkdir(parents=True, exist_ok=True)
+    (arts / "after.png").write_bytes(b"stale")
+    (arts / "manifest.json").write_text('{"artifacts":[{"path":"after.png"}]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: None)
+
+    list(mgr.review("rr", "o/r#3"))
+    assert mgr.artifacts("rr") == []                      # reset at review start
 
 
 # --- open_pr verification gate (run the repo's checks before pushing) ---
