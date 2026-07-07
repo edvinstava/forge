@@ -540,6 +540,9 @@ class ForgeSlackBot:
                 channel=channel, thread_ts=anchor_ts,
                 text=f"📝 review posted{tag}: {result['review_url']} "
                      f"({result['comments']} inline)")
+            # Surface any screenshots the review worker captured (best-effort;
+            # helper is thread-safe and no-ops when there are none).
+            self._post_artifacts(run_id, channel, anchor_ts)
         elif result:
             self.client.chat_postMessage(
                 channel=channel, thread_ts=anchor_ts,

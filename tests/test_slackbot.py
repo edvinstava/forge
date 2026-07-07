@@ -1094,6 +1094,28 @@ def test_review_intent_drives_manager_review_and_posts_url(tmp_path):
     assert any("pull/3" in p.text for p in client.posts)
 
 
+def test_review_posts_artifacts_after_review(tmp_path):
+    from forge.store import Store
+
+    class RevManager(FakeManager):
+        def review(self, run_id, pr, model="auto", origin="api"):
+            self.calls.append(("review", run_id, pr))
+            yield TE("review", ok=True, review_url="https://gh/o/r/pull/3#x",
+                     comments=2, dropped=0, degraded=False)
+
+    client = FakeClient()
+    manager = RevManager(artifacts=[_art("after.png", "after", "checkout works")])
+    bot = _bot(Store(tmp_path / "f.db"), manager=manager, client=client)
+    bot.handle_message("D1", "U1", "review o/r#3")
+
+    # the review screenshot is uploaded into the review thread
+    assert len(client.uploads) == 1
+    assert client.uploads[0].title == "checkout works"
+    assert client.uploads[0].thread_ts is not None
+    # still posts the review URL
+    assert any("pull/3" in p.text for p in client.posts)
+
+
 # --- channel support ---
 
 def test_channel_mention_starts_session_threaded_under_mention(tmp_path):
