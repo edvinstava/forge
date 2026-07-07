@@ -176,7 +176,8 @@ class SessionManager(ReviewOps, LifecycleOps):
                 yield TurnEvent("narration", {"text": red(ev.text)})
             elif ev.kind == "tool":
                 yield TurnEvent("tool", {"name": red(ev.text),
-                                         "target": red(ev.target)})
+                                         "target": red(ev.target),
+                                         "path": red(ev.path)})
             elif ev.kind == "result":
                 result = ev.result
         if result is not None and result.session_id:

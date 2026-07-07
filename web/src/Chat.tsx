@@ -25,6 +25,9 @@ export interface ChatProps {
   provisioningEvents?: SseEvent[];
   onUrl?: (url: string) => void;
   onTurnDone?: () => void;
+  /** A tool event touched a workspace file (name = tool, path = repo-relative)
+   *  — feeds the workspace's live files pane, foreign turns included. */
+  onFile?: (name: string, path: string) => void;
 }
 
 /* ── persisted messages → bubbles ── */
@@ -53,7 +56,7 @@ function readUrl(data: any): string | null {
    Chat
    ───────────────────────────────────────────────────────────────────────────── */
 
-export function Chat({ sessionId, provisioningEvents, onUrl, onTurnDone }: ChatProps) {
+export function Chat({ sessionId, provisioningEvents, onUrl, onTurnDone, onFile }: ChatProps) {
   const [state, dispatch] = useReducer(reducer, undefined, initialChatState);
 
   const [input, setInput] = useState("");
@@ -378,6 +381,7 @@ export function Chat({ sessionId, provisioningEvents, onUrl, onTurnDone }: ChatP
           break;
         case "tool":
           dispatch({ type: "LIVE_TOOL", name: e.data?.name ?? e.data?.text ?? "tool", target: e.data?.target });
+          if (e.data?.path && onFile) onFile(e.data?.name ?? "", e.data.path);
           break;
         case "verify":
           dispatch({ type: "LIVE_VERIFY", pass: Boolean(e.data?.ok) });
@@ -423,7 +427,7 @@ export function Chat({ sessionId, provisioningEvents, onUrl, onTurnDone }: ChatP
         }
       }
     },
-    [sessionId, onUrl, onTurnDone]
+    [sessionId, onUrl, onTurnDone, onFile]
   );
 
   /* ── Submit a message turn ── */

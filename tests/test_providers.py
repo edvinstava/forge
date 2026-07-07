@@ -86,6 +86,7 @@ def test_codex_stream_maps_items_to_events():
     assert tool.text == "Bash" and tool.target == "bun test"
     edit = events[3]
     assert edit.text == "Edit" and edit.target == "page.tsx"
+    assert edit.path == "src/app/page.tsx"
     result = events[-1].result
     assert result.ok and result.session_id == "th-1"
     assert result.result_text == "Fixed the offer column."

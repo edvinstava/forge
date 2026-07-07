@@ -1,5 +1,5 @@
 import json
-from forge.worker import parse_stream_line
+from forge.worker import parse_stream_line, workspace_relpath
 
 
 def test_assistant_text_is_narration():
@@ -59,3 +59,36 @@ def test_result_line_carries_worker_result():
 def test_blank_line_returns_none():
     assert parse_stream_line("") is None
     assert parse_stream_line("not json") is None
+
+
+def test_tool_use_carries_workspace_relative_path():
+    line = json.dumps({"type": "assistant",
+                       "message": {"content": [{"type": "tool_use", "name": "Edit",
+                                                "input": {"file_path": "/work/src/app/page.tsx"}}]}})
+    ev = parse_stream_line(line)
+    assert ev.path == "src/app/page.tsx"
+    assert ev.target == "page.tsx"
+
+
+def test_tool_path_outside_workspace_is_dropped():
+    line = json.dumps({"type": "assistant",
+                       "message": {"content": [{"type": "tool_use", "name": "Read",
+                                                "input": {"file_path": "/etc/passwd"}}]}})
+    ev = parse_stream_line(line)
+    assert ev.path == ""
+
+
+def test_tool_path_relative_and_dotted_forms_normalize():
+    assert workspace_relpath("./src/a.ts") == "src/a.ts"
+    assert workspace_relpath("src/a.ts") == "src/a.ts"
+    assert workspace_relpath("/work/a.ts") == "a.ts"
+    assert workspace_relpath("/work") == ""
+    assert workspace_relpath("") == ""
+
+
+def test_non_file_tools_have_no_path():
+    line = json.dumps({"type": "assistant",
+                       "message": {"content": [{"type": "tool_use", "name": "Bash",
+                                                "input": {"command": "rm -rf /work/src"}}]}})
+    ev = parse_stream_line(line)
+    assert ev.path == ""

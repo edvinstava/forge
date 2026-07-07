@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { getDiff } from "./api";
 import { parseDiff, STATUS_GLYPH, type DiffFile } from "./diffModel";
 
-function DiffFileView({ file }: { file: DiffFile }) {
+export function DiffFileView({ file }: { file: DiffFile }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="diff-file">

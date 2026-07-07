@@ -6,24 +6,30 @@
    Workspace.tsx.
    ───────────────────────────────────────────────────────────────────────────── */
 
-/** What the user pinned: `auto` follows the stream (agent while it's live,
- *  app otherwise); `app`/`agent` are explicit choices that stick. */
-export type PanePin = "auto" | "app" | "agent";
+/** What the user pinned: `auto` follows the agent (its browser while that's
+ *  live, the files it's editing while a turn edits, the app otherwise);
+ *  `app`/`agent`/`files` are explicit choices that stick. */
+export type PanePin = "auto" | Pane;
 
-export type Pane = "app" | "agent";
+export type Pane = "app" | "agent" | "files";
 
 /** Which pane the workspace's left side shows. A dead stream never wins:
  *  pinning "agent" with no frames would show a stale screenshot as if live,
- *  so an inactive stream always falls back to the app. */
-export function resolvePane(pin: PanePin, active: boolean): Pane {
-  if (!active) return "app";
-  return pin === "app" ? "app" : "agent";
+ *  so an inactive stream always falls back to the app. `editsLive` is true
+ *  while a turn streams file edits — auto mode shows those (the browser,
+ *  when it IS live, is the closer view of the agent and still wins). */
+export function resolvePane(pin: PanePin, active: boolean, editsLive = false): Pane {
+  if (pin === "files") return "files";
+  if (pin === "app") return "app";
+  if (pin === "agent") return active ? "agent" : "app";
+  return active ? "agent" : editsLive ? "files" : "app";
 }
 
 /** Clicking the pane toggle: choosing what `auto` already shows just stays in
- *  follow mode (no surprise lock-in); choosing the other pane pins it. */
-export function nextPin(pin: PanePin, active: boolean, clicked: Pane): PanePin {
-  if (pin === "auto" && resolvePane("auto", active) === clicked) return "auto";
+ *  follow mode (no surprise lock-in); choosing another pane pins it. */
+export function nextPin(pin: PanePin, active: boolean, clicked: Pane,
+                        editsLive = false): PanePin {
+  if (pin === "auto" && resolvePane("auto", active, editsLive) === clicked) return "auto";
   return clicked;
 }
 

@@ -181,6 +181,27 @@ def create_app(config, store, manager) -> FastAPI:
             media_type=f"multipart/x-mixed-replace; boundary={boundary}",
             headers={"Cache-Control": "no-store"})
 
+    # Live files view (workspace #live=<id>): the workspace tree + per-file
+    # content/diff, read host-side from the bind-mounted workspace
+    # (forge/workfiles.py) so it works even while the agent holds the
+    # container busy mid-turn. Same loopback-only exposure as /diff.
+    @app.get("/api/sessions/{run_id}/files")
+    def session_files(run_id: str):
+        if not store.get_run(run_id):
+            raise HTTPException(404, "no such session")
+        from forge import workfiles
+        return workfiles.list_files(config.runs_dir, run_id)
+
+    @app.get("/api/sessions/{run_id}/file")
+    def session_file(run_id: str, path: str = ""):
+        if not store.get_run(run_id):
+            raise HTTPException(404, "no such session")
+        from forge import workfiles
+        detail = workfiles.file_detail(config.runs_dir, run_id, path)
+        if detail is None:
+            raise HTTPException(404, "no such file")
+        return detail
+
     @app.post("/api/sessions")
     async def start_session(req: Request):
         body = await req.json()
