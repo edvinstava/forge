@@ -1140,6 +1140,26 @@ def test_review_pass_uses_browser_and_creds_when_app_url(tmp_path, monkeypatch):
     assert "s3cret" in prompt                             # creds injected
 
 
+def test_review_pass_injects_lessons(tmp_path, monkeypatch):
+    # Review agents must get the repo's lessons like QA does — they carry the
+    # working seed logins and sign-in gotchas the live check needs.
+    from forge import browserview
+    mgr, store, cfg = _review_mgr(tmp_path)
+    mgr.env_factory = lambda rid, files: CapturingEnv(rid, files)
+    _seed_review_ws(cfg, "rr", '{"summary":"ok","comments":[]}')
+    monkeypatch.setattr(mgr, "_app_url", lambda rid: "http://web:3000")
+    monkeypatch.setattr(mgr, "_lessons",
+                        lambda rid: ["Sign-in uses the email-input testid"])
+    monkeypatch.setattr(browserview, "start",
+                        lambda rd, rid, env, service="forge": None)
+    monkeypatch.setattr(browserview, "stop", lambda rd, rid: None)
+
+    list(mgr.review("rr", "o/r#3"))
+
+    prompt = _prompt_of(CapturingEnv.last_stream_argv)
+    assert "Sign-in uses the email-input testid" in prompt
+
+
 def test_review_pass_no_browser_start_without_app_url(tmp_path, monkeypatch):
     from forge import browserview
     mgr, store, cfg = _review_mgr(tmp_path)

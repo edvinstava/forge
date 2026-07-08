@@ -204,7 +204,7 @@ _REVIEW_SCHEMA = (
 
 
 def build_review_prompt(slug: str, number: int, app_url: str | None,
-                        credentials=None) -> str:
+                        credentials=None, lessons=()) -> str:
     if app_url:
         live = (
             f"\nLIVE CHECK — a live instance of this PR's app is running at "
@@ -232,7 +232,7 @@ def build_review_prompt(slug: str, number: int, app_url: str | None,
         "saved at `.forge/pr.diff` — read it to see exactly what changed, and "
         "read the surrounding code for context. You are advisory only: report "
         "findings, do not approve or block, and do not modify the code.\n"
-        f"{live}\n{_REVIEW_SCHEMA}"
+        f"{live}{lessons_block(lessons)}\n{_REVIEW_SCHEMA}"
     )
 
 
