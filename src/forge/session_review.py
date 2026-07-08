@@ -74,7 +74,10 @@ class ReviewOps:
         secrets = [c.get("password") for c in (creds or []) if c.get("password")]
         red = lambda s: redact_secrets(s, secrets)
         app_url = self._app_url(run_id)
-        full = build_review_prompt(ref.slug, ref.number, app_url, credentials=creds)
+        # Lessons ride along like in QA: they carry the working seed logins and
+        # sign-in gotchas the live check needs (creds alone aren't enough).
+        full = build_review_prompt(ref.slug, ref.number, app_url,
+                                   credentials=creds, lessons=self._lessons(run_id))
         chosen = self.provider.resolve_model(
             model, "review for correctness bugs and security")
         yield TurnEvent("model", {"choice": model, "resolved": chosen})

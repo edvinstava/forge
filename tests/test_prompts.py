@@ -51,6 +51,28 @@ def test_build_review_prompt_no_credentials_block_without_creds():
     assert "brute" in p.lower()                      # guardrail still present
 
 
+def test_build_review_prompt_includes_lessons():
+    from forge.prompts import build_review_prompt
+    p = build_review_prompt("o/r", 2, "http://web:3000",
+                            lessons=["Seed admin login is a@b.c"])
+    assert "LESSONS FROM PRIOR RUNS" in p
+    assert "Seed admin login is a@b.c" in p
+
+
+def test_build_review_prompt_lessons_without_app_url():
+    # Lessons carry repo conventions too — the static (diff-only) review
+    # must see them, not just the live check.
+    from forge.prompts import build_review_prompt
+    p = build_review_prompt("o/r", 1, None, lessons=["quality gate is npm run q"])
+    assert "quality gate is npm run q" in p
+
+
+def test_build_review_prompt_no_lessons_block_when_empty():
+    from forge.prompts import build_review_prompt
+    p = build_review_prompt("o/r", 2, "http://web:3000")
+    assert "LESSONS FROM PRIOR RUNS" not in p
+
+
 def test_review_schema_lists_all_live_check_statuses():
     from forge.prompts import build_review_prompt
     p = build_review_prompt("o/r", 1, None)
